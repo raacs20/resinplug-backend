@@ -7,6 +7,11 @@ import { Decimal } from "@prisma/client/runtime/library";
 export function serializeDecimals<T>(obj: T): T {
   if (obj === null || obj === undefined) return obj;
   if (obj instanceof Decimal) return obj.toNumber() as unknown as T;
+  // Fallback: check for Decimal-like objects with toNumber method
+  if (typeof obj === "object" && "toNumber" in (obj as object) && typeof (obj as Record<string, unknown>).toNumber === "function") {
+    return (obj as unknown as { toNumber: () => number }).toNumber() as unknown as T;
+  }
+  if (obj instanceof Date) return obj.toISOString() as unknown as T;
   if (Array.isArray(obj)) return obj.map(serializeDecimals) as unknown as T;
   if (typeof obj === "object") {
     const result: Record<string, unknown> = {};

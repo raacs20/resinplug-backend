@@ -31,6 +31,14 @@ export function badRequest(message: string) {
   return error("BAD_REQUEST", message, 400);
 }
 
+export function unauthorized(message = "Authentication required") {
+  return error("UNAUTHORIZED", message, 401);
+}
+
+export function forbidden(message = "Access denied") {
+  return error("FORBIDDEN", message, 403);
+}
+
 export function serverError(message = "Internal server error") {
   return error("SERVER_ERROR", message, 500);
 }
