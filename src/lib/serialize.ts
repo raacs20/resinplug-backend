@@ -24,6 +24,20 @@ export function serializeDecimals<T>(obj: T): T {
 }
 
 /**
+ * Flattens a Prisma review (with nested product) into the shape the frontend expects.
+ */
+export function formatReview(review: Record<string, unknown>) {
+  const product = review.product as Record<string, unknown> | undefined;
+  const { product: _product, ...rest } = review;
+  return {
+    ...rest,
+    productName: product?.name ?? "",
+    productImage: product?.image ?? "",
+    productCategory: product?.category ?? "",
+  };
+}
+
+/**
  * Formats a product from Prisma into the shape the frontend expects.
  * Converts Decimal prices to "$X.XX" strings to match existing frontend interfaces.
  */
