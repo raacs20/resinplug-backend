@@ -29,6 +29,7 @@ model Product {
   updatedAt     DateTime            @updatedAt
   variants      Variant[]
   collections   ProductCollection[]
+  wishlists     Wishlist[]
 
   @@index([category])
   @@index([popularity])
@@ -85,6 +86,8 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   orders         Order[]
+  wishlists      Wishlist[]
+  addresses      SavedAddress[]
 }
 
 model Order {
@@ -131,4 +134,38 @@ model OrderItem {
   quantity     Int
 
   @@index([orderId])
+}
+
+// ── Wishlist + Addresses (Phase 3) ──
+
+model Wishlist {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  addedAt   DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@index([userId])
+}
+
+model SavedAddress {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label     String
+  isDefault Boolean  @default(false)
+  firstName String
+  lastName  String
+  street    String
+  apartment String?
+  city      String
+  state     String
+  zip       String
+  country   String   @default("Canada")
+  phone     String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
 }
