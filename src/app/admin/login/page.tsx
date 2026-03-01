@@ -16,37 +16,17 @@ export default function AdminLogin() {
     setLoading(true);
 
     try {
-      // Step 1: Get CSRF token from NextAuth
-      const csrfRes = await fetch("/api/auth/csrf", { credentials: "include" });
-      const { csrfToken } = await csrfRes.json();
-
-      // Step 2: Sign in via NextAuth credentials callback
-      const res = await fetch("/api/auth/callback/credentials", {
+      const res = await fetch("/api/auth/admin-login", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          email,
-          password,
-          csrfToken,
-          redirect: "false",
-          json: "true",
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
         credentials: "include",
       });
 
-      // NextAuth returns 200 even on failure, check for error in URL
-      const data = await res.json().catch(() => null);
-      if (data?.url?.includes("error")) {
-        throw new Error("Invalid credentials");
-      }
+      const data = await res.json();
 
-      // Step 3: Verify admin role
-      const meRes = await fetch("/api/auth/me", { credentials: "include" });
-      if (!meRes.ok) throw new Error("Authentication failed");
-
-      const meData = await meRes.json();
-      if (meData.data?.role !== "admin") {
-        throw new Error("Access denied. Admin privileges required.");
+      if (!res.ok) {
+        throw new Error(data.error?.message || "Login failed");
       }
 
       router.push("/admin");
