@@ -16,18 +16,31 @@ export default function AdminLogin() {
     setLoading(true);
 
     try {
+      // Step 1: Get CSRF token from NextAuth
+      const csrfRes = await fetch("/api/auth/csrf", { credentials: "include" });
+      const { csrfToken } = await csrfRes.json();
+
+      // Step 2: Sign in via NextAuth credentials callback
       const res = await fetch("/api/auth/callback/credentials", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ email, password, redirect: "false" }),
+        body: new URLSearchParams({
+          email,
+          password,
+          csrfToken,
+          redirect: "false",
+          json: "true",
+        }),
         credentials: "include",
       });
 
-      if (!res.ok && res.status !== 302 && res.status !== 200) {
+      // NextAuth returns 200 even on failure, check for error in URL
+      const data = await res.json().catch(() => null);
+      if (data?.url?.includes("error")) {
         throw new Error("Invalid credentials");
       }
 
-      // Verify admin role
+      // Step 3: Verify admin role
       const meRes = await fetch("/api/auth/me", { credentials: "include" });
       if (!meRes.ok) throw new Error("Authentication failed");
 
