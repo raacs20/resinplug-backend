@@ -12,6 +12,11 @@ export function middleware(request: NextRequest) {
     frontendUrl,
     // Also allow 127.0.0.1 variant for local dev
     frontendUrl.replace("localhost", "127.0.0.1"),
+    // Production frontend
+    "https://resinplug-production.up.railway.app",
+    // Admin dashboard (local dev)
+    "http://localhost:3002",
+    "http://127.0.0.1:3002",
   ].filter(Boolean);
 
   const origin = request.headers.get("origin") ?? "";
@@ -23,7 +28,7 @@ export function middleware(request: NextRequest) {
       status: 204,
       headers: {
         "Access-Control-Allow-Origin": isAllowed ? origin : "",
-        "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Max-Age": "86400",
@@ -35,7 +40,7 @@ export function middleware(request: NextRequest) {
 
   if (isAllowed) {
     response.headers.set("Access-Control-Allow-Origin", origin);
-    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
     response.headers.set("Access-Control-Allow-Credentials", "true");
   }
