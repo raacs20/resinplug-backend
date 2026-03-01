@@ -25,7 +25,17 @@ export default function AdminDashboard() {
   useEffect(() => {
     fetch("/api/admin/dashboard", { credentials: "include" })
       .then((r) => r.json())
-      .then((data) => setStats(data.data))
+      .then((data) => {
+        const d = data.data;
+        setStats({
+          totalOrders: d?.stats?.totalOrders ?? 0,
+          totalRevenue: d?.stats?.totalRevenue ?? 0,
+          totalCustomers: d?.stats?.totalCustomers ?? 0,
+          todayOrders: d?.stats?.ordersToday ?? 0,
+          todayRevenue: d?.stats?.revenueToday ?? 0,
+          recentOrders: d?.recentOrders ?? [],
+        });
+      })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
@@ -39,14 +49,14 @@ export default function AdminDashboard() {
   }
 
   const cards = [
-    { label: "Total Revenue", value: `$${stats.totalRevenue.toFixed(2)}`, color: "text-green-400" },
-    { label: "Total Orders", value: stats.totalOrders.toString(), color: "text-blue-400" },
-    { label: "Total Customers", value: stats.totalCustomers.toString(), color: "text-purple-400" },
-    { label: "Today's Orders", value: stats.todayOrders.toString(), color: "text-orange-400" },
-    { label: "Today's Revenue", value: `$${stats.todayRevenue.toFixed(2)}`, color: "text-emerald-400" },
+    { label: "Total Revenue", value: `$${(stats.totalRevenue ?? 0).toFixed(2)}`, color: "text-green-400" },
+    { label: "Total Orders", value: (stats.totalOrders ?? 0).toString(), color: "text-blue-400" },
+    { label: "Total Customers", value: (stats.totalCustomers ?? 0).toString(), color: "text-purple-400" },
+    { label: "Today's Orders", value: (stats.todayOrders ?? 0).toString(), color: "text-orange-400" },
+    { label: "Today's Revenue", value: `$${(stats.todayRevenue ?? 0).toFixed(2)}`, color: "text-emerald-400" },
     {
       label: "Avg Order Value",
-      value: stats.totalOrders > 0 ? `$${(stats.totalRevenue / stats.totalOrders).toFixed(2)}` : "$0.00",
+      value: stats.totalOrders > 0 ? `$${((stats.totalRevenue ?? 0) / stats.totalOrders).toFixed(2)}` : "$0.00",
       color: "text-yellow-400",
     },
   ];
@@ -99,7 +109,7 @@ export default function AdminDashboard() {
                       {order.status.replace("_", " ")}
                     </span>
                   </td>
-                  <td className="p-3 text-right font-medium">${order.total.toFixed(2)}</td>
+                  <td className="p-3 text-right font-medium">${(order.total ?? 0).toFixed(2)}</td>
                   <td className="p-3 text-right text-gray-400 text-xs">
                     {new Date(order.createdAt).toLocaleDateString()}
                   </td>
