@@ -2,92 +2,276 @@
 
 import "./globals.css";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
 import Link from "next/link";
-import { AdminAuthProvider, useAdminAuth } from "./components/AdminAuthProvider";
+import {
+  AdminAuthProvider,
+  useAdminAuth,
+} from "./components/AdminAuthProvider";
+import {
+  SidebarProvider,
+  Sidebar,
+  SidebarHeader,
+  SidebarContent,
+  SidebarFooter,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarGroupContent,
+  SidebarTrigger,
+  SidebarInset,
+} from "@/components/ui/sidebar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Separator } from "@/components/ui/separator";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+} from "@/components/ui/breadcrumb";
+import { Skeleton } from "@/components/ui/skeleton";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "sonner";
+import {
+  LayoutDashboard,
+  Package,
+  ShoppingCart,
+  Tag,
+  Star,
+  Users,
+  Settings,
+  BarChart3,
+  Gift,
+  Search,
+  FileText,
+  LogOut,
+  ChevronUp,
+  Image,
+  Activity,
+} from "lucide-react";
+import { NotificationBell } from "./components/NotificationBell";
 
 /* ── Sidebar nav items ── */
-const NAV = [
-  { href: "/admin", label: "Dashboard", icon: "📊" },
-  { href: "/admin/products", label: "Products", icon: "📦" },
-  { href: "/admin/orders", label: "Orders", icon: "🛒" },
-  { href: "/admin/coupons", label: "Coupons", icon: "🎟️" },
-  { href: "/admin/reviews", label: "Reviews", icon: "⭐" },
-  { href: "/admin/customers", label: "Customers", icon: "👥" },
-  { href: "/admin/settings", label: "Settings", icon: "⚙️" },
+const NAV_MAIN = [
+  { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/admin/products", label: "Products", icon: Package },
+  { href: "/admin/orders", label: "Orders", icon: ShoppingCart },
+  { href: "/admin/customers", label: "Customers", icon: Users },
 ];
+
+const NAV_MARKETING = [
+  { href: "/admin/promotions", label: "Promotions", icon: Tag },
+  { href: "/admin/reviews", label: "Reviews", icon: Star },
+  { href: "/admin/content", label: "Content", icon: FileText },
+  { href: "/admin/media", label: "Media", icon: Image },
+
+];
+
+const NAV_SYSTEM = [
+  { href: "/admin/seo", label: "SEO", icon: Search },
+  { href: "/admin/activity", label: "Activity Log", icon: Activity },
+  { href: "/admin/reports", label: "Reports", icon: BarChart3 },
+  { href: "/admin/settings", label: "Settings", icon: Settings },
+];
+
+function getPageTitle(pathname: string): string {
+  if (pathname === "/admin") return "Dashboard";
+  const segments = pathname.replace("/admin/", "").split("/");
+  return segments[0].replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function NavGroup({
+  label,
+  items,
+  pathname,
+}: {
+  label: string;
+  items: typeof NAV_MAIN;
+  pathname: string;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {items.map((item) => {
+            const active =
+              pathname === item.href ||
+              (item.href !== "/admin" && pathname.startsWith(item.href));
+            return (
+              <SidebarMenuItem key={item.href}>
+                <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+                  <Link href={item.href}>
+                    <item.icon />
+                    <span>{item.label}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  );
+}
+
+function AdminSidebar() {
+  const pathname = usePathname();
+  const { user, logout } = useAdminAuth();
+
+  const initials = user?.name
+    ? user.name
+        .split(" ")
+        .map((n) => n[0])
+        .join("")
+        .toUpperCase()
+    : "A";
+
+  return (
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" asChild>
+              <Link href="/admin">
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold text-sm">
+                  RP
+                </div>
+                <div className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-semibold">ResinPlug</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    Admin Panel
+                  </span>
+                </div>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+
+      <SidebarContent>
+        <NavGroup label="Store" items={NAV_MAIN} pathname={pathname} />
+        <NavGroup label="Marketing" items={NAV_MARKETING} pathname={pathname} />
+        <NavGroup label="System" items={NAV_SYSTEM} pathname={pathname} />
+      </SidebarContent>
+
+      <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton
+                  size="lg"
+                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                >
+                  <Avatar className="h-8 w-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg bg-primary/20 text-primary text-xs">
+                      {initials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-semibold">
+                      {user?.name || "Admin"}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {user?.email}
+                    </span>
+                  </div>
+                  <ChevronUp className="ml-auto size-4" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+                side="top"
+                align="end"
+                sideOffset={4}
+              >
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/settings">
+                    <Settings className="mr-2 h-4 w-4" />
+                    Settings
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={logout} className="text-destructive">
+                  <LogOut className="mr-2 h-4 w-4" />
+                  Sign Out
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
 
 function AdminShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, loading, logout } = useAdminAuth();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { loading } = useAdminAuth();
 
-  // Login page has no sidebar
+  // Login page — no sidebar
   if (pathname === "/admin/login") {
-    return <div className="min-h-screen bg-gray-950 text-white">{children}</div>;
+    return <div className="min-h-screen bg-background text-foreground">{children}</div>;
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-white text-lg">Loading...</div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <Skeleton className="h-8 w-8 rounded-full" />
+          <Skeleton className="h-4 w-32" />
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex">
-      {/* Mobile overlay */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/60 z-40 lg:hidden" onClick={() => setSidebarOpen(false)} />
-      )}
-
-      {/* Sidebar */}
-      <aside className={`fixed lg:static inset-y-0 left-0 z-50 w-64 bg-gray-900 border-r border-gray-800 flex flex-col transform transition-transform lg:translate-x-0 ${sidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
-        <div className="p-5 border-b border-gray-800">
-          <h1 className="text-xl font-bold text-orange-500">ResinPlug</h1>
-          <p className="text-xs text-gray-400 mt-1">Admin Dashboard</p>
-        </div>
-        <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {NAV.map((item) => {
-            const active = pathname === item.href || (item.href !== "/admin" && pathname.startsWith(item.href));
-            return (
-              <Link key={item.href} href={item.href} onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors ${active ? "bg-orange-500/15 text-orange-400" : "text-gray-400 hover:bg-gray-800 hover:text-white"}`}>
-                <span>{item.icon}</span>
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-        <div className="p-4 border-t border-gray-800">
-          <div className="text-sm text-gray-400 mb-2 truncate">{user?.email}</div>
-          <button onClick={logout} className="w-full text-sm text-red-400 hover:text-red-300 text-left">Sign Out</button>
-        </div>
-      </aside>
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-gray-800 flex items-center px-4 lg:px-6 bg-gray-900/50 backdrop-blur-sm sticky top-0 z-30">
-          <button onClick={() => setSidebarOpen(true)} className="lg:hidden mr-3 text-gray-400 hover:text-white">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-          <h2 className="text-sm font-medium text-gray-300 capitalize">
-            {pathname === "/admin" ? "Dashboard" : pathname.split("/").pop()?.replace(/-/g, " ")}
-          </h2>
+    <SidebarProvider>
+      <AdminSidebar />
+      <SidebarInset>
+        {/* Header */}
+        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-2 h-4" />
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbPage>{getPageTitle(pathname)}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <div className="ml-auto">
+            <NotificationBell />
+          </div>
         </header>
-        <main className="flex-1 p-4 lg:p-6 overflow-y-auto">{children}</main>
-      </div>
-    </div>
+
+        {/* Main content */}
+        <main className="flex-1 p-4 lg:p-6">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
 
-export default function AdminLayout({ children }: { children: React.ReactNode }) {
+export default function AdminLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
-    <AdminAuthProvider>
-      <AdminShell>{children}</AdminShell>
-    </AdminAuthProvider>
+    <TooltipProvider>
+      <AdminAuthProvider>
+        <AdminShell>{children}</AdminShell>
+        <Toaster theme="dark" richColors position="top-right" />
+      </AdminAuthProvider>
+    </TooltipProvider>
   );
 }

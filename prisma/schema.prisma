@@ -14,23 +14,38 @@ enum Category {
 }
 
 model Product {
-  id            String              @id @default(cuid())
-  name          String
-  slug          String              @unique
-  salePrice     Decimal             @db.Decimal(10, 2)
-  originalPrice Decimal             @db.Decimal(10, 2)
-  image         String
-  category      Category
-  thc           String
-  popularity    Int                 @default(0)
-  featured      Boolean             @default(false)
-  isActive      Boolean             @default(true)
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  variants      Variant[]
-  collections   ProductCollection[]
-  wishlists     Wishlist[]
-  reviews       Review[]
+  id              String              @id @default(cuid())
+  name            String
+  slug            String              @unique
+  salePrice       Decimal             @db.Decimal(10, 2)
+  originalPrice   Decimal             @db.Decimal(10, 2)
+  image           String
+  category        Category
+  thc             String
+  popularity      Int                 @default(0)
+  featured        Boolean             @default(false)
+  isActive        Boolean             @default(true)
+  // New fields
+  description     String?             @db.Text
+  shortDesc       String?
+  sku             String?
+  totalStockGrams Decimal?            @db.Decimal(10, 2)
+  stockUnit       String              @default("grams")
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+  // Timestamps
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  // Relations
+  variants        Variant[]
+  images          ProductImage[]
+  collections     ProductCollection[]
+  wishlists       Wishlist[]
+  reviews         Review[]
+  stockMovements  StockMovement[]
+  reorderPoint    Int?            @default(0)
+  relatedProductIds String[]        @default([])
 
   @@index([category])
   @@index([popularity])
@@ -46,6 +61,24 @@ model Variant {
   originalPrice Decimal? @db.Decimal(10, 2)
   discount      String?
   sortOrder     Int      @default(0)
+  // New fields
+  sku           String?
+  gramsPerUnit  Decimal? @db.Decimal(10, 2)
+  stockOverride Int?
+  isActive      Boolean  @default(true)
+
+  @@index([productId])
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  url       String
+  alt       String?
+  sortOrder Int      @default(0)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
 
   @@index([productId])
 }
@@ -68,7 +101,7 @@ model ProductCollection {
   @@index([collectionId])
 }
 
-// ── Auth + Orders (Phase 2) ──
+// ── Auth + Orders ──
 
 enum UserRole {
   user
@@ -84,18 +117,22 @@ enum OrderStatus {
 }
 
 model User {
-  id             String   @id @default(cuid())
+  id             String         @id @default(cuid())
   name           String?
-  email          String   @unique
+  email          String         @unique
   hashedPassword String
   phone          String?
-  role           UserRole @default(user)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  isBanned       Boolean        @default(false)
+  role           UserRole       @default(user)
+  creditBalance  Decimal        @db.Decimal(10, 2) @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
   orders         Order[]
   wishlists      Wishlist[]
   addresses      SavedAddress[]
   reviews        Review[]
+  credits        Credit[]
+  notes          CustomerNote[]
 }
 
 model Order {
@@ -121,7 +158,14 @@ model Order {
   notes          String?
   trackingNumber String?
   carrierName    String?
+  // New fields
+  discountAmount Decimal?    @db.Decimal(10, 2)
+  couponCode     String?
+  creditsUsed    Decimal?    @db.Decimal(10, 2)
   items          OrderItem[]
+  events         OrderEvent[]
+  refunds        Refund[]
+  orderNotes     OrderNote[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
@@ -144,7 +188,7 @@ model OrderItem {
   @@index([orderId])
 }
 
-// ── Wishlist + Addresses (Phase 3) ──
+// ── Wishlist + Addresses ──
 
 model Wishlist {
   id        String   @id @default(cuid())
@@ -178,7 +222,7 @@ model SavedAddress {
   @@index([userId])
 }
 
-// ── Coupons + Settings (Phase 5 – Admin) ──
+// ── Coupons + Settings ──
 
 enum DiscountType {
   percentage
@@ -211,7 +255,7 @@ model SiteSetting {
   @@index([key])
 }
 
-// ── Reviews (Phase 4) ──
+// ── Reviews ──
 
 model Review {
   id           String   @id @default(cuid())
@@ -220,7 +264,7 @@ model Review {
   userId       String?
   user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   customerName String
-  rating       Int      // 1-5
+  rating       Int
   title        String?
   text         String
   verified     Boolean  @default(false)
@@ -231,4 +275,187 @@ model Review {
 
   @@index([productId])
   @@index([userId])
+}
+
+// ── Credits / Rewards ──
+
+enum CreditType {
+  earned
+  spent
+  refund
+  manual
+}
+
+model Credit {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount    Decimal    @db.Decimal(10, 2)
+  type      CreditType
+  reason    String?
+  orderId   String?
+  createdAt DateTime   @default(now())
+
+  @@index([userId])
+  @@index([orderId])
+}
+
+// ── Page SEO ──
+
+model PageSeo {
+  id              String   @id @default(cuid())
+  pageSlug        String   @unique
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+  ogImage         String?
+  updatedAt       DateTime @updatedAt
+
+  @@index([pageSlug])
+}
+
+// ── Activity Log ──
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String
+  entity    String
+  entityId  String?
+  details   String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([adminId])
+  @@index([entity])
+  @@index([createdAt])
+}
+
+// ── Discounts / Marketing ──
+
+model Discount {
+  id        String       @id @default(cuid())
+  name      String
+  type      DiscountType
+  value     Decimal      @db.Decimal(10, 2)
+  appliesTo String       @default("all")
+  targetIds String?
+  startDate DateTime?
+  endDate   DateTime?
+  isActive  Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+// ── CMS Content ──
+
+model ContentBlock {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  type      String   @default("text")
+  value     String   @db.Text
+  section   String
+  label     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([section])
+}
+
+// ── Notifications ──
+
+model Notification {
+  id        String   @id @default(cuid())
+  type      String
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([isRead, createdAt])
+}
+
+// ── Customer Notes ──
+
+model CustomerNote {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note      String   @db.Text
+  createdBy String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ── Order Events / Timeline ──
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type      String   // "status_change", "tracking_added", "note_added", "refund_issued", "created"
+  fromValue String?  // e.g. old status
+  toValue   String?  // e.g. new status
+  note      String?  @db.Text
+  adminId   String?
+  adminName String?
+  createdAt DateTime @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  amount      Decimal  @db.Decimal(10, 2)
+  reason      String   // "customer_request", "defective", "wrong_item", "duplicate", "other"
+  notes       String?  @db.Text
+  status      String   @default("completed") // "pending", "completed", "failed"
+  processedBy String?
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model OrderNote {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  note      String   @db.Text
+  isInternal Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+}
+
+// -- FAQ --
+
+model FAQ {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String   @db.Text
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// -- Stock Movements --
+
+model StockMovement {
+  id        String   @id @default(cuid())
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type      String   // adjustment, order_deduction, order_restore, restock
+  quantity  Float    // positive = added, negative = removed
+  reason    String?
+  reference String?  // order ID or admin note
+  adminName String?
+  createdAt DateTime @default(now())
+
+  @@index([productId])
 }

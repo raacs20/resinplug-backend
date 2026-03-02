@@ -9,6 +9,7 @@ import {
   serverError,
 } from "@/lib/api-response";
 import { serializeDecimals, formatReview } from "@/lib/serialize";
+import { createNotification } from "@/lib/notifications";
 import { z } from "zod";
 
 const createReviewSchema = z.object({
@@ -189,6 +190,14 @@ export async function POST(
         },
       },
     });
+
+    // Fire-and-forget notification for admin
+    createNotification(
+      "new_review",
+      "New Review",
+      `${review.customerName} left a ${review.rating}-star review`,
+      `/admin/reviews`
+    ).catch((e) => console.error("Notification error:", e));
 
     return success(formatReview(serializeDecimals(review) as Record<string, unknown>), { status: 201 });
   } catch (err) {

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { success, badRequest, unauthorized, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
+import { createNotification } from "@/lib/notifications";
 import { z } from "zod";
 
 const FREE_SHIPPING_THRESHOLD = 200;
@@ -38,6 +39,15 @@ function generateOrderNumber(): string {
   const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
   const randPart = Math.random().toString(36).substring(2, 5).toUpperCase();
   return `RP-${datePart}-${randPart}`;
+}
+
+/**
+ * Parse grams from a weight string like "1 gram", "3 grams", "15 grams", "28 grams", "1g", etc.
+ * Returns the numeric gram value or 0 if unparseable.
+ */
+function parseGramsFromWeight(weight: string): number {
+  const match = weight.match(/(\d+(?:\.\d+)?)\s*(?:g(?:ram)?s?)?/i);
+  return match ? parseFloat(match[1]) : 0;
 }
 
 export async function POST(request: NextRequest) {
@@ -97,6 +107,65 @@ export async function POST(request: NextRequest) {
       },
       include: { items: true },
     });
+
+    // --- Auto stock deduction ---
+    // For each order item with a productId, deduct stock from the product
+    try {
+      for (const item of order.items) {
+        if (!item.productId) continue;
+
+        // Try to find the variant's gramsPerUnit first
+        const variant = await prisma.variant.findFirst({
+          where: {
+            productId: item.productId,
+            weight: item.weight,
+          },
+        });
+
+        let gramsToDeduct: number;
+        if (variant?.gramsPerUnit) {
+          gramsToDeduct = Number(variant.gramsPerUnit) * item.quantity;
+        } else {
+          // Estimate from weight string
+          const gramsPerUnit = parseGramsFromWeight(item.weight);
+          gramsToDeduct = gramsPerUnit * item.quantity;
+        }
+
+        if (gramsToDeduct > 0) {
+          await prisma.product.update({
+            where: { id: item.productId },
+            data: {
+              totalStockGrams: { decrement: gramsToDeduct },
+            },
+          });
+        }
+      }
+    } catch (stockErr) {
+      // Log but don't fail the order — stock deduction is best-effort
+      console.error("Stock deduction error:", stockErr);
+    }
+
+    // --- Create "created" OrderEvent ---
+    try {
+      await prisma.orderEvent.create({
+        data: {
+          orderId: order.id,
+          type: "created",
+          toValue: "processing",
+          note: `Order ${order.orderNumber} created`,
+        },
+      });
+    } catch (eventErr) {
+      console.error("OrderEvent creation error:", eventErr);
+    }
+
+    // Fire-and-forget notification for admin
+    createNotification(
+      "new_order",
+      "New Order",
+      `Order ${order.orderNumber} placed for $${order.total}`,
+      `/admin/orders/${order.id}`
+    ).catch((e) => console.error("Notification error:", e));
 
     return success(serializeDecimals(order), { status: 201 });
   } catch (err) {

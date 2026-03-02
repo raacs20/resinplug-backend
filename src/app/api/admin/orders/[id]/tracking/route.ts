@@ -3,22 +3,31 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
+import { logActivity } from "@/lib/activity-log";
+import { z } from "zod";
 
-export async function PATCH(
+const trackingSchema = z.object({
+  trackingNumber: z.string().min(1, "Tracking number is required"),
+  carrierName: z.string().optional(),
+});
+
+export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
     const { id } = await params;
     const body = await request.json();
-    const { trackingNumber, carrierName } = body;
 
-    if (!trackingNumber && !carrierName) {
-      return badRequest("At least one of trackingNumber or carrierName is required");
+    const parsed = trackingSchema.safeParse(body);
+    if (!parsed.success) {
+      return badRequest(parsed.error.errors[0]?.message || "Invalid tracking data");
     }
+
+    const { trackingNumber, carrierName } = parsed.data;
 
     // Verify the order exists
     const existing = await prisma.order.findUnique({ where: { id } });
@@ -26,8 +35,7 @@ export async function PATCH(
       return notFound("Order not found");
     }
 
-    const data: Record<string, string> = {};
-    if (trackingNumber !== undefined) data.trackingNumber = trackingNumber;
+    const data: Record<string, string> = { trackingNumber };
     if (carrierName !== undefined) data.carrierName = carrierName;
 
     const order = await prisma.order.update({
@@ -35,6 +43,33 @@ export async function PATCH(
       data,
       include: { items: true },
     });
+
+    const adminId = session!.user!.id!;
+    const adminName = session!.user!.name || session!.user!.email || "Admin";
+
+    // Create order event for tracking update
+    try {
+      await prisma.orderEvent.create({
+        data: {
+          orderId: id,
+          type: "tracking_added",
+          toValue: trackingNumber,
+          note: carrierName ? `Carrier: ${carrierName}` : undefined,
+          adminId,
+          adminName,
+        },
+      });
+    } catch {
+      // Non-critical
+    }
+
+    await logActivity(
+      adminId,
+      "order.tracking_update",
+      "order",
+      id,
+      `Tracking updated: ${trackingNumber}${carrierName ? ` (${carrierName})` : ""}`
+    );
 
     return success(serializeDecimals(order));
   } catch (err) {

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/admin";
 import { success, notFound, badRequest, serverError } from "@/lib/api-response";
 import { formatProduct } from "@/lib/serialize";
 import { z } from "zod";
@@ -52,6 +53,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const { error } = await requireAdmin();
+  if (error) return error;
+
   try {
     const { slug } = await params;
     const body = await request.json();
@@ -92,6 +96,9 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const { error } = await requireAdmin();
+  if (error) return error;
+
   try {
     const { slug } = await params;
     const existing = await prisma.product.findUnique({ where: { slug } });

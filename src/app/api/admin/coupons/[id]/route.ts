@@ -3,12 +3,35 @@ import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
 import { success, notFound, badRequest, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
+import { logActivity } from "@/lib/activity-log";
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { error } = await requireAdmin();
+  if (error) return error;
+
+  try {
+    const { id } = await params;
+
+    const coupon = await prisma.coupon.findUnique({ where: { id } });
+    if (!coupon) {
+      return notFound("Coupon not found");
+    }
+
+    return success(serializeDecimals(coupon));
+  } catch (err) {
+    console.error("Admin coupon detail error:", err);
+    return serverError();
+  }
+}
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -38,6 +61,14 @@ export async function PUT(
 
     const coupon = await prisma.coupon.update({ where: { id }, data });
 
+    await logActivity(
+      session!.user!.id!,
+      "coupon.update",
+      "coupon",
+      id,
+      `Coupon updated: ${coupon.code}`
+    );
+
     return success(serializeDecimals(coupon));
   } catch (err) {
     console.error("Admin coupon update error:", err);
@@ -49,7 +80,7 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -58,6 +89,15 @@ export async function DELETE(
     if (!existing) return notFound("Coupon not found");
 
     await prisma.coupon.delete({ where: { id } });
+
+    await logActivity(
+      session!.user!.id!,
+      "coupon.delete",
+      "coupon",
+      id,
+      `Coupon deleted: ${existing.code}`
+    );
+
     return success({ deleted: true });
   } catch (err) {
     console.error("Admin coupon delete error:", err);

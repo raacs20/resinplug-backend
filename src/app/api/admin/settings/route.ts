@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
+import { logActivity } from "@/lib/activity-log";
 import { success, badRequest, serverError } from "@/lib/api-response";
 
 export async function GET() {
@@ -22,7 +23,7 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -43,6 +44,8 @@ export async function PUT(request: NextRequest) {
         })
       )
     );
+
+    await logActivity(session!.user!.id, "settings.update", "settings", undefined, `Updated ${Object.keys(body).length} settings`);
 
     // Return updated settings
     const settings = await prisma.siteSetting.findMany();

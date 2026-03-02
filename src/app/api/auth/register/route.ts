@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { success, badRequest, serverError } from "@/lib/api-response";
+import { createNotification } from "@/lib/notifications";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 
@@ -28,6 +29,14 @@ export async function POST(request: NextRequest) {
     const user = await prisma.user.create({
       data: { name, email, hashedPassword, phone },
     });
+
+    // Fire-and-forget notification for admin
+    createNotification(
+      "new_customer",
+      "New Customer",
+      `${user.name || user.email} just registered`,
+      `/admin/customers`
+    ).catch((e) => console.error("Notification error:", e));
 
     return success(
       { id: user.id, name: user.name, email: user.email },

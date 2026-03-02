@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
+import { logActivity } from "@/lib/activity-log";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -68,6 +69,8 @@ export async function POST(request: NextRequest) {
         expiresAt: expiresAt ? new Date(expiresAt) : null,
       },
     });
+
+    await logActivity(session!.user!.id, "coupon.create", "coupon", coupon.id, coupon.code);
 
     return success(serializeDecimals(coupon), { status: 201 });
   } catch (err) {

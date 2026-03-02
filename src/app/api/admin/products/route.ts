@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
+import { logActivity } from "@/lib/activity-log";
 import { success, badRequest, serverError } from "@/lib/api-response";
+import { z } from "zod";
+import { Category } from "@prisma/client";
 import { serializeDecimals } from "@/lib/serialize";
 
 export async function GET(request: NextRequest) {
@@ -53,21 +56,51 @@ export async function GET(request: NextRequest) {
   }
 }
 
+const productCreateSchema = z.object({
+  name: z.string().min(1, "name is required"),
+  slug: z.string().min(1).optional(),
+  salePrice: z.number().positive("salePrice must be a positive number"),
+  originalPrice: z.number().positive("originalPrice must be a positive number"),
+  image: z.string().optional().default(""),
+  category: z.nativeEnum(Category, { errorMap: () => ({ message: "category must be Indica, Hybrid, or Sativa" }) }),
+  thc: z.string().optional().default(""),
+  popularity: z.number().int().min(0).max(10).optional().default(0),
+  featured: z.boolean().optional().default(false),
+  description: z.string().nullable().optional(),
+  shortDesc: z.string().nullable().optional(),
+  sku: z.string().nullable().optional(),
+  totalStockGrams: z.number().positive().nullable().optional(),
+  stockUnit: z.string().optional().default("grams"),
+  metaTitle: z.string().nullable().optional(),
+  metaDescription: z.string().nullable().optional(),
+  metaKeywords: z.string().nullable().optional(),
+  variants: z.array(z.object({
+    weight: z.string().min(1),
+    price: z.number().positive(),
+    originalPrice: z.number().positive().optional(),
+    discount: z.string().optional(),
+    sku: z.string().optional(),
+    gramsPerUnit: z.number().optional(),
+    sortOrder: z.number().int().optional(),
+    isDefault: z.boolean().optional(),
+  })).optional(),
+});
+
 export async function POST(request: NextRequest) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
     const body = await request.json();
-    const { name, salePrice, originalPrice, image, category, thc, popularity, featured, variants } = body;
-
-    if (!name || !salePrice || !originalPrice || !image || !category || !thc) {
-      return badRequest("Missing required fields: name, salePrice, originalPrice, image, category, thc");
+    const parsed = productCreateSchema.safeParse(body);
+    if (!parsed.success) {
+      return badRequest(parsed.error.issues.map((i) => i.message).join(", "));
     }
 
-    if (!["Indica", "Hybrid", "Sativa"].includes(category)) {
-      return badRequest("Invalid category");
-    }
+    const {
+      name, salePrice, originalPrice, image, category, thc, popularity, featured, variants,
+      description, shortDesc, sku, totalStockGrams, stockUnit, metaTitle, metaDescription, metaKeywords,
+    } = parsed.data;
 
     // Generate slug from name
     const slug = name
@@ -92,14 +125,24 @@ export async function POST(request: NextRequest) {
         thc,
         popularity: popularity || 0,
         featured: featured || false,
+        description: description ?? null,
+        shortDesc: shortDesc ?? null,
+        sku: sku ?? null,
+        totalStockGrams: totalStockGrams ?? null,
+        stockUnit: stockUnit ?? "grams",
+        metaTitle: metaTitle ?? null,
+        metaDescription: metaDescription ?? null,
+        metaKeywords: metaKeywords ?? null,
         variants: variants?.length
           ? {
-              create: variants.map((v: { weight: string; price: number; originalPrice?: number; discount?: string }, i: number) => ({
+              create: variants.map((v, i: number) => ({
                 weight: v.weight,
                 price: v.price,
                 originalPrice: v.originalPrice || null,
                 discount: v.discount || null,
-                sortOrder: i,
+                sku: v.sku || null,
+                gramsPerUnit: v.gramsPerUnit || null,
+                sortOrder: v.sortOrder ?? i,
               })),
             }
           : {
@@ -113,6 +156,8 @@ export async function POST(request: NextRequest) {
       },
       include: { variants: { orderBy: { sortOrder: "asc" } } },
     });
+
+    await logActivity(session!.user!.id, "product.create", "product", product.id, product.name);
 
     return success(serializeDecimals(product), { status: 201 });
   } catch (err) {

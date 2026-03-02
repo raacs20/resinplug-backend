@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
+import { logActivity } from "@/lib/activity-log";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 
@@ -16,13 +17,51 @@ const ALLOWED_FIELDS = new Set([
   "popularity",
   "featured",
   "isActive",
+  "description",
+  "shortDesc",
+  "sku",
+  "totalStockGrams",
+  "stockUnit",
+  "reorderPoint",
+  "metaTitle",
+  "metaDescription",
+  "metaKeywords",
 ]);
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { error } = await requireAdmin();
+  if (error) return error;
+
+  try {
+    const { id } = await params;
+
+    const product = await prisma.product.findUnique({
+      where: { id },
+      include: {
+        variants: { orderBy: { sortOrder: "asc" } },
+        images: { orderBy: { sortOrder: "asc" } },
+      },
+    });
+
+    if (!product) {
+      return notFound("Product not found");
+    }
+
+    return success(serializeDecimals(product));
+  } catch (err) {
+    console.error("Admin product get error:", err);
+    return serverError();
+  }
+}
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -65,6 +104,8 @@ export async function PUT(
       },
     });
 
+    await logActivity(session!.user!.id, "product.update", "product", id, `Updated ${Object.keys(data).join(", ")}`);
+
     return success(serializeDecimals(product));
   } catch (err) {
     console.error("Admin product update error:", err);
@@ -76,7 +117,7 @@ export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { error } = await requireAdmin();
+  const { error, session } = await requireAdmin();
   if (error) return error;
 
   try {
@@ -84,8 +125,14 @@ export async function DELETE(
     const existing = await prisma.product.findUnique({ where: { id } });
     if (!existing) return notFound("Product not found");
 
-    await prisma.product.delete({ where: { id } });
-    return success({ deleted: true });
+    await prisma.product.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    await logActivity(session!.user!.id, "product.deactivate", "product", id);
+
+    return success({ deactivated: true });
   } catch (err) {
     console.error("Admin product delete error:", err);
     return serverError();

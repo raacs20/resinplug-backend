@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { success, badRequest, serverError } from "@/lib/api-response";
+import { requireAdmin } from "@/lib/admin";
 import { formatProduct } from "@/lib/serialize";
 import { z } from "zod";
 import { Category, Prisma } from "@prisma/client";
@@ -90,6 +91,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const { error } = await requireAdmin();
+  if (error) return error;
+
   try {
     const body = await request.json();
     const parsed = createSchema.safeParse(body);
