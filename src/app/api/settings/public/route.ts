@@ -10,6 +10,17 @@ const PUBLIC_KEYS = [
   "siteTitle",
   "siteDescription",
   "maintenanceMode",
+  // Branding
+  "storeName",
+  "brandLogo",
+  "brandFavicon",
+  "brandTagline",
+  "colorPrimary",
+  "colorPrimaryHover",
+  "colorBackground",
+  "colorCardDark",
+  "colorBorder",
+  "colorMutedText",
 ];
 
 export async function GET() {

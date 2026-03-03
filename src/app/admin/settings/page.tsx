@@ -24,6 +24,10 @@ import {
   Coins,
   Save,
   Loader2,
+  Palette,
+  Upload,
+  RotateCcw,
+  ImageIcon,
 } from "lucide-react";
 
 interface Settings {
@@ -46,7 +50,26 @@ interface Settings {
   creditsPerDollar: string;
   creditValue: string;
   signupBonusCredits: string;
+  // Branding
+  brandLogo: string;
+  brandFavicon: string;
+  brandTagline: string;
+  colorPrimary: string;
+  colorPrimaryHover: string;
+  colorBackground: string;
+  colorCardDark: string;
+  colorBorder: string;
+  colorMutedText: string;
 }
+
+const DEFAULT_COLORS = {
+  colorPrimary: "#EC691B",
+  colorPrimaryHover: "#D45D16",
+  colorBackground: "#050100",
+  colorCardDark: "#0F0F0F",
+  colorBorder: "#444444",
+  colorMutedText: "#D1D1D1",
+};
 
 const DEFAULT_SETTINGS: Settings = {
   storeName: "",
@@ -64,7 +87,24 @@ const DEFAULT_SETTINGS: Settings = {
   creditsPerDollar: "",
   creditValue: "",
   signupBonusCredits: "",
+  brandLogo: "",
+  brandFavicon: "",
+  brandTagline: "",
+  ...DEFAULT_COLORS,
 };
+
+const COLOR_FIELDS: {
+  key: keyof Settings;
+  label: string;
+  desc: string;
+}[] = [
+  { key: "colorPrimary", label: "Primary Accent", desc: "Buttons, links, and CTAs" },
+  { key: "colorPrimaryHover", label: "Primary Hover", desc: "Button hover states" },
+  { key: "colorBackground", label: "Background", desc: "Page background" },
+  { key: "colorCardDark", label: "Card / Dark", desc: "Card backgrounds" },
+  { key: "colorBorder", label: "Border", desc: "Borders and dividers" },
+  { key: "colorMutedText", label: "Muted Text", desc: "Secondary text color" },
+];
 
 export default function AdminSettings() {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
@@ -114,6 +154,39 @@ export default function AdminSettings() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const [uploading, setUploading] = useState<"logo" | "favicon" | null>(null);
+
+  const handleBrandingUpload = async (
+    file: File,
+    type: "logo" | "favicon"
+  ) => {
+    setUploading(type);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("type", type);
+      const res = await fetch("/api/admin/settings/upload", {
+        method: "POST",
+        credentials: "include",
+        body: formData,
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      const json = await res.json();
+      const key = type === "logo" ? "brandLogo" : "brandFavicon";
+      setSettings((prev) => ({ ...prev, [key]: json.data.url }));
+      toast.success(`${type === "logo" ? "Logo" : "Favicon"} uploaded`);
+    } catch {
+      toast.error(`Failed to upload ${type}`);
+    } finally {
+      setUploading(null);
+    }
+  };
+
+  const resetColors = () => {
+    setSettings((prev) => ({ ...prev, ...DEFAULT_COLORS }));
+    toast.success("Colors reset to defaults");
   };
 
   useKeyboardShortcut([
@@ -172,6 +245,10 @@ export default function AdminSettings() {
           <TabsTrigger value="credits">
             <Coins className="mr-1.5 h-4 w-4" />
             Credits
+          </TabsTrigger>
+          <TabsTrigger value="branding">
+            <Palette className="mr-1.5 h-4 w-4" />
+            Branding
           </TabsTrigger>
         </TabsList>
 
@@ -435,6 +512,173 @@ export default function AdminSettings() {
                 <p className="text-xs text-muted-foreground">
                   Credits awarded when a new customer creates an account
                 </p>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        {/* Branding Tab */}
+        <TabsContent value="branding" className="space-y-6">
+          {/* Identity */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Brand Identity</CardTitle>
+              <CardDescription>
+                Logo, favicon, and tagline — the face of your site
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Logo Upload */}
+              <div className="space-y-2">
+                <Label>Logo</Label>
+                <div className="flex items-start gap-4">
+                  {settings.brandLogo ? (
+                    <div className="flex-shrink-0 w-[160px] h-[80px] rounded-lg border border-border bg-black flex items-center justify-center overflow-hidden">
+                      <img
+                        src={settings.brandLogo}
+                        alt="Logo"
+                        className="max-w-full max-h-full object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-shrink-0 w-[160px] h-[80px] rounded-lg border border-dashed border-border flex items-center justify-center">
+                      <ImageIcon className="h-8 w-8 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div className="flex-1 space-y-2">
+                    <label className="cursor-pointer">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleBrandingUpload(file, "logo");
+                          e.target.value = "";
+                        }}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="pointer-events-none"
+                        disabled={uploading === "logo"}
+                      >
+                        {uploading === "logo" ? (
+                          <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                        ) : (
+                          <Upload className="mr-2 h-3 w-3" />
+                        )}
+                        {uploading === "logo" ? "Uploading..." : "Upload Logo"}
+                      </Button>
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      PNG, SVG, or WebP. Recommended: transparent background, 400×200px
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Favicon Upload */}
+              <div className="space-y-2">
+                <Label>Favicon</Label>
+                <div className="flex items-center gap-4">
+                  {settings.brandFavicon ? (
+                    <div className="flex-shrink-0 w-10 h-10 rounded border border-border bg-black flex items-center justify-center overflow-hidden">
+                      <img
+                        src={settings.brandFavicon}
+                        alt="Favicon"
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex-shrink-0 w-10 h-10 rounded border border-dashed border-border flex items-center justify-center">
+                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                  )}
+                  <label className="cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleBrandingUpload(file, "favicon");
+                        e.target.value = "";
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="pointer-events-none"
+                      disabled={uploading === "favicon"}
+                    >
+                      {uploading === "favicon" ? (
+                        <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Upload className="mr-2 h-3 w-3" />
+                      )}
+                      {uploading === "favicon" ? "Uploading..." : "Upload Favicon"}
+                    </Button>
+                  </label>
+                </div>
+              </div>
+
+              {/* Tagline */}
+              <div className="space-y-2">
+                <Label htmlFor="brandTagline">Tagline</Label>
+                <Input
+                  id="brandTagline"
+                  value={settings.brandTagline}
+                  onChange={(e) => updateField("brandTagline", e.target.value)}
+                  placeholder="The absolute cheapest resin in the USA."
+                />
+                <p className="text-xs text-muted-foreground">
+                  Appears in the footer below your logo
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Colors */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Brand Colors</CardTitle>
+                  <CardDescription>
+                    Pick your colors — the frontend updates instantly
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={resetColors}
+                >
+                  <RotateCcw className="mr-2 h-3 w-3" />
+                  Reset to Defaults
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {COLOR_FIELDS.map(({ key, label, desc }) => (
+                  <div key={key} className="flex items-center gap-3">
+                    <input
+                      type="color"
+                      value={settings[key] || DEFAULT_COLORS[key as keyof typeof DEFAULT_COLORS]}
+                      onChange={(e) => updateField(key, e.target.value)}
+                      className="h-10 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5 [&::-webkit-color-swatch-wrapper]:p-0 [&::-webkit-color-swatch]:rounded"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm">{label}</Label>
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {settings[key] || DEFAULT_COLORS[key as keyof typeof DEFAULT_COLORS]}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">{desc}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
