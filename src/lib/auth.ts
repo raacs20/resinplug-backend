@@ -3,6 +3,16 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 
+const isProduction = process.env.NODE_ENV === "production";
+
+/* Cross-origin cookie options for production (frontend ↔ backend on different subdomains) */
+const crossOriginCookieOptions = {
+  httpOnly: true,
+  sameSite: isProduction ? ("none" as const) : ("lax" as const),
+  secure: isProduction,
+  path: "/",
+};
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Credentials({
@@ -35,6 +45,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, // 30 days
+  },
+  cookies: {
+    sessionToken: {
+      name: isProduction
+        ? "__Secure-next-auth.session-token"
+        : "next-auth.session-token",
+      options: {
+        ...crossOriginCookieOptions,
+        maxAge: 30 * 24 * 60 * 60,
+      },
+    },
+    csrfToken: {
+      name: isProduction
+        ? "__Host-next-auth.csrf-token"
+        : "next-auth.csrf-token",
+      options: {
+        httpOnly: true,
+        sameSite: isProduction ? ("none" as const) : ("lax" as const),
+        secure: isProduction,
+        path: "/",
+      },
+    },
+    callbackUrl: {
+      name: isProduction
+        ? "__Secure-next-auth.callback-url"
+        : "next-auth.callback-url",
+      options: {
+        ...crossOriginCookieOptions,
+      },
+    },
   },
   callbacks: {
     async jwt({ token, user }) {
