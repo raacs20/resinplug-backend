@@ -8,6 +8,7 @@ import { z } from "zod";
 
 const FREE_SHIPPING_THRESHOLD = 200;
 const SHIPPING_COST = 9.99;
+const POINTS_PER_DOLLAR = 100; // 100 points = $1 store credit
 
 const orderItemSchema = z.object({
   productId: z.string().optional(),
@@ -32,6 +33,7 @@ const createOrderSchema = z.object({
   email: z.string().email(),
   paymentMethod: z.enum(["card", "etransfer", "applepay"]),
   notes: z.string().optional().default(""),
+  rewardPointsUsed: z.number().int().min(0).optional().default(0),
 });
 
 function generateOrderNumber(): string {
@@ -60,7 +62,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { items, ...orderData } = parsed.data;
+    const { items, rewardPointsUsed, ...orderData } = parsed.data;
 
     // Calculate totals server-side (never trust client)
     const subtotal = items.reduce(
@@ -69,11 +71,33 @@ export async function POST(request: NextRequest) {
     );
     const shippingCost =
       subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_COST;
-    const total = subtotal + shippingCost;
 
     // Get authenticated user if logged in (optional for guest checkout)
     const session = await auth();
     const userId = session?.user?.id ?? null;
+
+    // --- Validate and apply reward points discount ---
+    let creditsDiscount = 0;
+    if (rewardPointsUsed > 0) {
+      if (!userId) {
+        return badRequest("Must be logged in to use reward points");
+      }
+      const userRecord = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { creditBalance: true },
+      });
+      if (!userRecord || Number(userRecord.creditBalance) < rewardPointsUsed) {
+        return badRequest("Insufficient reward points");
+      }
+      creditsDiscount = Math.round((rewardPointsUsed / POINTS_PER_DOLLAR) * 100) / 100;
+      // Don't let discount exceed the order total
+      const maxTotal = subtotal + shippingCost;
+      if (creditsDiscount > maxTotal) {
+        creditsDiscount = maxTotal;
+      }
+    }
+
+    const total = subtotal + shippingCost - creditsDiscount;
 
     const order = await prisma.order.create({
       data: {
@@ -82,6 +106,7 @@ export async function POST(request: NextRequest) {
         subtotal,
         shippingCost,
         total,
+        creditsUsed: creditsDiscount > 0 ? creditsDiscount : null,
         firstName: orderData.firstName,
         lastName: orderData.lastName,
         country: orderData.country,
@@ -157,6 +182,56 @@ export async function POST(request: NextRequest) {
       });
     } catch (eventErr) {
       console.error("OrderEvent creation error:", eventErr);
+    }
+
+    // --- Deduct reward points if used ---
+    if (rewardPointsUsed > 0 && userId) {
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.credit.create({
+            data: {
+              userId,
+              amount: rewardPointsUsed,
+              type: "spent",
+              reason: `Redeemed at checkout - Order #${order.orderNumber}`,
+              orderId: order.id,
+            },
+          });
+          await tx.user.update({
+            where: { id: userId },
+            data: { creditBalance: { decrement: rewardPointsUsed } },
+          });
+        });
+      } catch (spendErr) {
+        console.error("Credit spend error:", spendErr);
+      }
+    }
+
+    // --- Award reward points (1 point per $1 spent, logged-in users only) ---
+    if (userId) {
+      try {
+        const pointsEarned = Math.floor(total); // 1 point per $1 (after discount)
+        if (pointsEarned > 0) {
+          await prisma.$transaction(async (tx) => {
+            await tx.credit.create({
+              data: {
+                userId,
+                amount: pointsEarned,
+                type: "earned",
+                reason: `Purchase - Order #${order.orderNumber}`,
+                orderId: order.id,
+              },
+            });
+            await tx.user.update({
+              where: { id: userId },
+              data: { creditBalance: { increment: pointsEarned } },
+            });
+          });
+        }
+      } catch (rewardErr) {
+        // Log but don't fail the order — reward points are best-effort
+        console.error("Reward points error:", rewardErr);
+      }
     }
 
     // Fire-and-forget notification for admin
