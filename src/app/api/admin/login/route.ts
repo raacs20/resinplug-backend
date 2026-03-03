@@ -49,8 +49,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const secureCookieName = "__Secure-authjs.session-token";
-    const plainCookieName = "authjs.session-token";
+    // Must match the cookie names in auth.ts NextAuth config
+    const secureCookieName = "__Secure-next-auth.session-token";
+    const plainCookieName = "next-auth.session-token";
     const isProduction = process.env.NODE_ENV === "production";
     const salt = isProduction ? secureCookieName : plainCookieName;
 
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
       maxAge: 30 * 24 * 60 * 60, // 30 days
     });
 
-    // Set the session cookie (NextAuth v5 uses authjs.session-token)
+    // Set the session cookie (must match auth.ts cookie config)
     const response = NextResponse.json({
       data: {
         id: user.id,
@@ -86,10 +87,10 @@ export async function POST(request: NextRequest) {
       maxAge: 30 * 24 * 60 * 60,
     };
 
-    response.cookies.set("authjs.session-token", token, cookieOptions);
+    response.cookies.set("next-auth.session-token", token, cookieOptions);
     // Also set the __Secure- prefixed version for production HTTPS
     if (process.env.NODE_ENV === "production") {
-      response.cookies.set("__Secure-authjs.session-token", token, {
+      response.cookies.set("__Secure-next-auth.session-token", token, {
         ...cookieOptions,
         secure: true,
       });
