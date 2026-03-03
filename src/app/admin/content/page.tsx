@@ -623,7 +623,7 @@ export default function AdminContent() {
       </div>
 
       <Tabs defaultValue="hero" onValueChange={setActiveTab}>
-        <TabsList className="flex flex-wrap h-auto gap-1">
+        <TabsList className="flex w-full h-auto gap-1 overflow-x-auto overflow-y-hidden pb-1">
           {SECTIONS.map((section) => (
             <TabsTrigger key={section.id} value={section.id}>
               <section.icon className="mr-1.5 h-4 w-4" />
@@ -677,7 +677,202 @@ export default function AdminContent() {
             </Card>
           </TabsContent>
         ))}
+
+        {/* ── FAQ Tab Content ── */}
+        <TabsContent value="faq">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <HelpCircle className="h-5 w-5" />
+                    FAQ
+                  </CardTitle>
+                  <CardDescription>
+                    Manage frequently asked questions displayed on the frontend
+                  </CardDescription>
+                </div>
+                <Button onClick={() => setShowAddFaq(true)}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add FAQ
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Add new FAQ form */}
+              {showAddFaq && (
+                <Card className="border-dashed">
+                  <CardContent className="pt-6 space-y-4">
+                    <div className="space-y-2">
+                      <Label>Question</Label>
+                      <Input
+                        value={newFaqQuestion}
+                        onChange={(e) => setNewFaqQuestion(e.target.value)}
+                        placeholder="Enter the question..."
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Answer</Label>
+                      <Textarea
+                        value={newFaqAnswer}
+                        onChange={(e) => setNewFaqAnswer(e.target.value)}
+                        placeholder="Enter the answer..."
+                        rows={3}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Sort Order</Label>
+                      <Input
+                        type="number"
+                        value={newFaqSortOrder}
+                        onChange={(e) => setNewFaqSortOrder(e.target.value)}
+                        placeholder="0"
+                      />
+                      <p className="text-xs text-muted-foreground">Lower numbers appear first</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button onClick={handleAddFaq} disabled={addingFaq}>
+                        {addingFaq ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Check className="mr-2 h-4 w-4" />
+                        )}
+                        {addingFaq ? "Adding..." : "Add FAQ"}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setShowAddFaq(false);
+                          setNewFaqQuestion("");
+                          setNewFaqAnswer("");
+                          setNewFaqSortOrder("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* FAQ list */}
+              {faqLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                </div>
+              ) : faqs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <HelpCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No FAQs yet. Click &quot;Add FAQ&quot; to create one.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {faqs
+                    .sort((a, b) => a.sortOrder - b.sortOrder)
+                    .map((faq) => (
+                      <Card key={faq.id} className={!faq.isActive ? "opacity-50" : ""}>
+                        <CardContent className="pt-4 pb-4">
+                          {editingFaqId === faq.id ? (
+                            /* ── Editing mode ── */
+                            <div className="space-y-3">
+                              <div className="space-y-2">
+                                <Label>Question</Label>
+                                <Input
+                                  value={editFaqQuestion}
+                                  onChange={(e) => setEditFaqQuestion(e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Answer</Label>
+                                <Textarea
+                                  value={editFaqAnswer}
+                                  onChange={(e) => setEditFaqAnswer(e.target.value)}
+                                  rows={3}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Sort Order</Label>
+                                <Input
+                                  type="number"
+                                  value={editFaqSortOrder}
+                                  onChange={(e) => setEditFaqSortOrder(e.target.value)}
+                                />
+                              </div>
+                              <div className="flex gap-2">
+                                <Button size="sm" onClick={handleSaveEditFaq} disabled={savingFaqEdit}>
+                                  {savingFaqEdit ? (
+                                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Check className="mr-2 h-3 w-3" />
+                                  )}
+                                  Save
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={cancelEditFaq}>
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            /* ── Display mode ── */
+                            <div className="flex items-start gap-3">
+                              <GripVertical className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5 cursor-grab" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <p className="font-medium text-sm">{faq.question}</p>
+                                  {!faq.isActive && (
+                                    <Badge variant="secondary" className="text-xs">Hidden</Badge>
+                                  )}
+                                </div>
+                                <p className="text-sm text-muted-foreground line-clamp-2">{faq.answer}</p>
+                              </div>
+                              <div className="flex items-center gap-1 flex-shrink-0">
+                                <Switch
+                                  checked={faq.isActive}
+                                  onCheckedChange={() => handleToggleFaqActive(faq)}
+                                />
+                                <Button size="icon" variant="ghost" onClick={() => startEditFaq(faq)}>
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="text-destructive hover:text-destructive"
+                                  onClick={() => setDeleteFaqConfirm(faq)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
+
+      {/* ── Delete FAQ Confirmation Dialog ── */}
+      <AlertDialog open={!!deleteFaqConfirm} onOpenChange={() => setDeleteFaqConfirm(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete &quot;{deleteFaqConfirm?.question}&quot;. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteFaq} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
