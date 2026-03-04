@@ -2,10 +2,9 @@ import { NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { uploadImage, isCloudinaryConfigured } from "@/lib/cloudinary";
+import { optimizeAndSave } from "@/lib/image-optimizer";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
 
 export async function POST(request: NextRequest) {
   const { error, session } = await requireAdmin();
@@ -48,15 +47,16 @@ export async function POST(request: NextRequest) {
       });
       url = result.url;
     } else {
-      // Fallback: save to public/uploads/branding/
-      const uploadsDir = path.join(process.cwd(), "public", "uploads", "branding");
-      await mkdir(uploadsDir, { recursive: true });
-
-      const ext = file.name.split(".").pop() || "png";
-      const filename = `${type}-${Date.now()}.${ext}`;
-      const filepath = path.join(uploadsDir, filename);
-      await writeFile(filepath, buffer);
-      url = `/uploads/branding/${filename}`;
+      // Self-hosted: optimize with sharp then save
+      // Logos are typically landscape, favicons are square
+      const isLogo = type === "logo";
+      const result = await optimizeAndSave(buffer, {
+        subfolder: "branding",
+        maxWidth: isLogo ? 400 : 192,
+        maxHeight: isLogo ? 200 : 192,
+        quality: isLogo ? 85 : 80,
+      });
+      url = result.url;
     }
 
     // Auto-save the URL to the corresponding setting

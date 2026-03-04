@@ -32,19 +32,34 @@ export function formatReview(review: Record<string, unknown>) {
   return {
     ...rest,
     productName: product?.name ?? "",
-    productImage: product?.image ?? "",
+    productImage: normalizeImagePath(product?.image),
     productCategory: product?.category ?? "",
   };
 }
 
 /**
+ * Normalize image paths to .webp.
+ * All strain images were converted from PNG to WebP — this ensures
+ * any legacy .png paths in the database are served correctly.
+ */
+function normalizeImagePath(imagePath: unknown): string {
+  if (typeof imagePath !== "string" || !imagePath) return "";
+  // Convert /strains/xxx.png → /strains/xxx.webp
+  if (imagePath.startsWith("/strains/") && imagePath.endsWith(".png")) {
+    return imagePath.replace(/\.png$/, ".webp");
+  }
+  return imagePath;
+}
+
+/**
  * Formats a product from Prisma into the shape the frontend expects.
- * Converts Decimal prices to "$X.XX" strings to match existing frontend interfaces.
+ * Converts Decimal prices to "$X.XX" strings and normalizes image paths.
  */
 export function formatProduct(product: Record<string, unknown>) {
   const variants = (product.variants as Record<string, unknown>[]) || [];
   return {
     ...product,
+    image: normalizeImagePath(product.image),
     salePrice: `$${Number(product.salePrice).toFixed(2)}`,
     originalPrice: `$${Number(product.originalPrice).toFixed(2)}`,
     variants: variants.map((v) => ({

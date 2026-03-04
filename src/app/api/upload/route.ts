@@ -2,8 +2,7 @@ import { NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { uploadImage, isCloudinaryConfigured } from "@/lib/cloudinary";
-import { writeFile, mkdir } from "fs/promises";
-import path from "path";
+import { optimizeAndSave } from "@/lib/image-optimizer";
 
 export async function POST(request: NextRequest) {
   const { error } = await requireAdmin();
@@ -31,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    // If Cloudinary is configured, upload there
+    // If Cloudinary is configured, upload there (it has its own optimization)
     if (isCloudinaryConfigured()) {
       const result = await uploadImage(buffer, {
         folder: "resinplug/products",
@@ -45,21 +44,19 @@ export async function POST(request: NextRequest) {
       }, { status: 201 });
     }
 
-    // Fallback: save to public/uploads/ directory (development only)
-    const uploadsDir = path.join(process.cwd(), "public", "uploads");
-    await mkdir(uploadsDir, { recursive: true });
-
-    const ext = file.name.split(".").pop() || "png";
-    const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-    const filepath = path.join(uploadsDir, filename);
-
-    await writeFile(filepath, buffer);
+    // Self-hosted: optimize with sharp (resize + WebP + compress) then save
+    const result = await optimizeAndSave(buffer, {
+      subfolder: "products",
+      maxWidth: 800,
+      maxHeight: 800,
+      quality: 80,
+    });
 
     return success({
-      url: `/uploads/${filename}`,
+      url: result.url,
       publicId: null,
-      width: null,
-      height: null,
+      width: result.width,
+      height: result.height,
     }, { status: 201 });
   } catch (err) {
     console.error("Upload error:", err);
