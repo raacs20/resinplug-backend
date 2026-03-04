@@ -13,6 +13,31 @@ function toNum(val: unknown): number {
   return Number(val) || 0;
 }
 
+/* ══════════════════════════════════════════════════════════════════════
+   In-memory cache — avoids re-querying millions of rows on every
+   admin page load. 5-minute TTL per (type+range) combo.
+   ══════════════════════════════════════════════════════════════════════ */
+const cache = new Map<string, { data: unknown; expires: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCached(key: string): unknown | null {
+  const entry = cache.get(key);
+  if (entry && Date.now() < entry.expires) return entry.data;
+  cache.delete(key);
+  return null;
+}
+
+function setCache(key: string, data: unknown) {
+  cache.set(key, { data, expires: Date.now() + CACHE_TTL });
+  // Evict old entries if cache grows too large (unlikely but safe)
+  if (cache.size > 50) {
+    const now = Date.now();
+    for (const [k, v] of cache) {
+      if (now >= v.expires) cache.delete(k);
+    }
+  }
+}
+
 export async function GET(req: NextRequest) {
   const { error } = await requireAdmin();
   if (error) return error;
@@ -24,37 +49,53 @@ export async function GET(req: NextRequest) {
   startDate.setDate(startDate.getDate() - days);
   startDate.setUTCHours(0, 0, 0, 0);
 
+  const cacheKey = `${type}_${days}`;
+  const cached = getCached(cacheKey);
+  if (cached) return success(cached);
+
   try {
-    if (type === "traffic") return await handleTraffic(days, startDate);
-    if (type === "funnel") return await handleFunnel(days, startDate);
-    if (type === "geo") return await handleGeo(startDate);
-    if (type === "customers") return await handleCustomers(startDate);
-    return badRequest("Invalid type. Use: traffic, funnel, geo, customers");
+    let result: unknown;
+    if (type === "traffic") result = await handleTraffic(days, startDate);
+    else if (type === "funnel") result = await handleFunnel(days, startDate);
+    else if (type === "geo") result = await handleGeo(startDate);
+    else if (type === "customers") result = await handleCustomers(startDate);
+    else return badRequest("Invalid type. Use: traffic, funnel, geo, customers");
+
+    setCache(cacheKey, result);
+    return success(result);
   } catch (err) {
     console.error("Analytics error:", err);
     return serverError("Failed to generate analytics");
   }
 }
 
-/* ── Traffic ── */
+/* ══════════════════════════════════════════════════════════════════════
+   Traffic — uses GROUP BY instead of loading every row into memory
+   ══════════════════════════════════════════════════════════════════════ */
 async function handleTraffic(days: number, startDate: Date) {
-  const [totalPageViews, uniqueVisitors, pageViews, topPagesRaw] =
+  // 3 efficient queries instead of loading all rows
+  const [totalPageViews, uniqueVisitorRows, viewsByDayRaw, topPagesRaw] =
     await Promise.all([
+      // Simple count
       prisma.analyticsEvent.count({
         where: { event: "page_view", createdAt: { gte: startDate } },
       }),
-      prisma.analyticsEvent
-        .findMany({
-          where: { event: "page_view", createdAt: { gte: startDate } },
-          distinct: ["sessionId"],
-          select: { sessionId: true },
-        })
-        .then((r) => r.length),
-      prisma.analyticsEvent.findMany({
-        where: { event: "page_view", createdAt: { gte: startDate } },
-        select: { createdAt: true },
-        orderBy: { createdAt: "asc" },
-      }),
+      // COUNT DISTINCT via raw SQL — avoids loading millions of sessionIds
+      prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(DISTINCT "sessionId") as count
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+      `,
+      // GROUP BY date — returns ~30 rows instead of ~150K rows
+      prisma.$queryRaw<Array<{ day: string; views: bigint }>>`
+        SELECT TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
+               COUNT(*) as views
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        GROUP BY day
+        ORDER BY day
+      `,
+      // Top pages — already efficient with groupBy
       prisma.analyticsEvent.groupBy({
         by: ["url"],
         where: { event: "page_view", createdAt: { gte: startDate } },
@@ -64,17 +105,18 @@ async function handleTraffic(days: number, startDate: Date) {
       }),
     ]);
 
-  // Build page views by day
-  const now = new Date();
+  const uniqueVisitors = Number(uniqueVisitorRows[0]?.count ?? 0);
+
+  // Fill in zero-days for the chart
   const viewsByDayMap = new Map<string, number>();
+  const now = new Date();
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setUTCDate(d.getUTCDate() - i);
     viewsByDayMap.set(d.toISOString().slice(0, 10), 0);
   }
-  for (const pv of pageViews) {
-    const key = new Date(pv.createdAt).toISOString().slice(0, 10);
-    viewsByDayMap.set(key, (viewsByDayMap.get(key) ?? 0) + 1);
+  for (const row of viewsByDayRaw) {
+    viewsByDayMap.set(row.day, Number(row.views));
   }
   const pageViewsByDay = Array.from(viewsByDayMap.entries()).map(
     ([date, views]) => ({ date, views })
@@ -85,7 +127,7 @@ async function handleTraffic(days: number, startDate: Date) {
     views: p._count,
   }));
 
-  return success({
+  return {
     totalPageViews,
     uniqueVisitors,
     avgViewsPerVisitor:
@@ -94,10 +136,12 @@ async function handleTraffic(days: number, startDate: Date) {
         : 0,
     pageViewsByDay,
     topPages,
-  });
+  };
 }
 
-/* ── Funnel ── */
+/* ══════════════════════════════════════════════════════════════════════
+   Funnel — replaces 270 individual queries with 2 batch queries
+   ══════════════════════════════════════════════════════════════════════ */
 async function handleFunnel(days: number, startDate: Date) {
   const stages = [
     "page_view",
@@ -107,17 +151,24 @@ async function handleFunnel(days: number, startDate: Date) {
     "purchase",
   ];
 
-  // Count distinct sessions per stage
-  const stageCounts = await Promise.all(
-    stages.map(async (event) => {
-      const sessions = await prisma.analyticsEvent.findMany({
-        where: { event, createdAt: { gte: startDate } },
-        distinct: ["sessionId"],
-        select: { sessionId: true },
-      });
-      return { event, sessions: sessions.length };
-    })
+  // 1 query: distinct sessions per event type (instead of 5 separate findMany)
+  const stageRows = await prisma.$queryRaw<
+    Array<{ event: string; sessions: bigint }>
+  >`
+    SELECT event, COUNT(DISTINCT "sessionId") as sessions
+    FROM "AnalyticsEvent"
+    WHERE event IN ('page_view','view_item','add_to_cart','begin_checkout','purchase')
+      AND "createdAt" >= ${startDate}
+    GROUP BY event
+  `;
+
+  const stageMap = new Map(
+    stageRows.map((r) => [r.event, Number(r.sessions)])
   );
+  const stageCounts = stages.map((event) => ({
+    event,
+    sessions: stageMap.get(event) || 0,
+  }));
 
   // Calculate drop-off rates
   const funnel = stageCounts.map((stage, i) => {
@@ -139,46 +190,52 @@ async function handleFunnel(days: number, startDate: Date) {
     };
   });
 
-  // Daily funnel data for trend chart
+  // 1 query: daily counts for 3 key stages (instead of days×3 queries)
+  const dailyRows = await prisma.$queryRaw<
+    Array<{ day: string; event: string; cnt: bigint }>
+  >`
+    SELECT TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
+           event,
+           COUNT(*) as cnt
+    FROM "AnalyticsEvent"
+    WHERE event IN ('page_view','add_to_cart','purchase')
+      AND "createdAt" >= ${startDate}
+    GROUP BY day, event
+    ORDER BY day
+  `;
+
+  // Build daily map
+  const dailyMap = new Map<string, Record<string, number>>();
   const now = new Date();
-  const funnelByDay: Array<Record<string, unknown>> = [];
   for (let i = days - 1; i >= 0; i--) {
     const d = new Date(now);
     d.setUTCDate(d.getUTCDate() - i);
-    const dayStr = d.toISOString().slice(0, 10);
-    const dayStart = new Date(dayStr + "T00:00:00Z");
-    const dayEnd = new Date(dayStr + "T23:59:59.999Z");
-
-    const row: Record<string, unknown> = { date: dayStr };
-    for (const stage of ["page_view", "add_to_cart", "purchase"]) {
-      const count = await prisma.analyticsEvent.count({
-        where: {
-          event: stage,
-          createdAt: { gte: dayStart, lte: dayEnd },
-        },
-      });
-      row[stage] = count;
-    }
-    funnelByDay.push(row);
+    const key = d.toISOString().slice(0, 10);
+    dailyMap.set(key, { page_view: 0, add_to_cart: 0, purchase: 0 });
   }
+  for (const row of dailyRows) {
+    const dayData = dailyMap.get(row.day);
+    if (dayData) dayData[row.event] = Number(row.cnt);
+  }
+  const funnelByDay = Array.from(dailyMap.entries()).map(([date, counts]) => ({
+    date,
+    ...counts,
+  }));
 
-  return success({
+  return {
     funnel,
     funnelByDay,
     cartRate:
       stageCounts[0].sessions > 0
         ? Math.round(
-            ((stageCounts.find((s) => s.event === "add_to_cart")?.sessions ||
-              0) /
-              stageCounts[0].sessions) *
+            ((stageMap.get("add_to_cart") || 0) / stageCounts[0].sessions) *
               1000
           ) / 10
         : 0,
     checkoutRate:
       stageCounts[0].sessions > 0
         ? Math.round(
-            ((stageCounts.find((s) => s.event === "begin_checkout")?.sessions ||
-              0) /
+            ((stageMap.get("begin_checkout") || 0) /
               stageCounts[0].sessions) *
               1000
           ) / 10
@@ -186,12 +243,10 @@ async function handleFunnel(days: number, startDate: Date) {
     purchaseRate:
       stageCounts[0].sessions > 0
         ? Math.round(
-            ((stageCounts.find((s) => s.event === "purchase")?.sessions || 0) /
-              stageCounts[0].sessions) *
-              1000
+            ((stageMap.get("purchase") || 0) / stageCounts[0].sessions) * 1000
           ) / 10
         : 0,
-  });
+  };
 }
 
 function formatStageName(event: string): string {
@@ -205,7 +260,9 @@ function formatStageName(event: string): string {
   return names[event] || event;
 }
 
-/* ── Geographic & Payment ── */
+/* ══════════════════════════════════════════════════════════════════════
+   Geographic & Payment — queries Order table (small), already efficient
+   ══════════════════════════════════════════════════════════════════════ */
 async function handleGeo(startDate: Date) {
   const orders = await prisma.order.findMany({
     where: { createdAt: { gte: startDate } },
@@ -218,10 +275,7 @@ async function handleGeo(startDate: Date) {
   });
 
   // By country
-  const countryMap = new Map<
-    string,
-    { orders: number; revenue: number }
-  >();
+  const countryMap = new Map<string, { orders: number; revenue: number }>();
   for (const o of orders) {
     const country = o.country || "Unknown";
     const total = toNum(o.total);
@@ -242,10 +296,7 @@ async function handleGeo(startDate: Date) {
     .sort((a, b) => b.revenue - a.revenue);
 
   // By province
-  const provinceMap = new Map<
-    string,
-    { orders: number; revenue: number }
-  >();
+  const provinceMap = new Map<string, { orders: number; revenue: number }>();
   for (const o of orders) {
     const province = o.province || "Unknown";
     const total = toNum(o.total);
@@ -267,10 +318,7 @@ async function handleGeo(startDate: Date) {
     .slice(0, 20);
 
   // By payment method
-  const paymentMap = new Map<
-    string,
-    { orders: number; revenue: number }
-  >();
+  const paymentMap = new Map<string, { orders: number; revenue: number }>();
   for (const o of orders) {
     const method = o.paymentMethod || "Unknown";
     const total = toNum(o.total);
@@ -290,19 +338,21 @@ async function handleGeo(startDate: Date) {
     }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  return success({
+  return {
     byCountry,
     byProvince,
     byPaymentMethod,
     totalCountries: byCountry.length,
     topCountry: byCountry[0]?.country || "N/A",
     topPaymentMethod: byPaymentMethod[0]?.method || "N/A",
-  });
+  };
 }
 
-/* ── Customer Insights ── */
+/* ══════════════════════════════════════════════════════════════════════
+   Customer Insights — queries Order + User tables (small), already efficient
+   ══════════════════════════════════════════════════════════════════════ */
 async function handleCustomers(startDate: Date) {
-  // LTV distribution
+  // LTV distribution — groupBy is efficient
   const allUsersWithOrders = await prisma.order.groupBy({
     by: ["userId"],
     where: { userId: { not: null } },
@@ -362,7 +412,7 @@ async function handleCustomers(startDate: Date) {
     { userIds: string[]; signupCount: number }
   >();
   for (const u of users) {
-    const month = u.createdAt.toISOString().slice(0, 7); // "2025-01"
+    const month = u.createdAt.toISOString().slice(0, 7);
     const existing = cohortMap.get(month);
     if (existing) {
       existing.userIds.push(u.id);
@@ -372,12 +422,25 @@ async function handleCustomers(startDate: Date) {
     }
   }
 
-  // Get order dates for these users
+  // Get order dates — only userId + month needed
   const allOrders = await prisma.order.findMany({
     where: { userId: { not: null } },
     select: { userId: true, createdAt: true },
     orderBy: { createdAt: "asc" },
   });
+
+  // Pre-index orders by month for O(1) lookup instead of O(n) scan
+  const ordersByMonth = new Map<string, Map<string, boolean>>();
+  for (const order of allOrders) {
+    if (!order.userId) continue;
+    const month = order.createdAt.toISOString().slice(0, 7);
+    let monthMap = ordersByMonth.get(month);
+    if (!monthMap) {
+      monthMap = new Map();
+      ordersByMonth.set(month, monthMap);
+    }
+    monthMap.set(order.userId, true);
+  }
 
   // Build cohort retention table (last 6 months)
   const now = new Date();
@@ -394,26 +457,24 @@ async function handleCustomers(startDate: Date) {
       const cohort = cohortMap.get(month)!;
       const userSet = new Set(cohort.userIds);
 
-      // For each subsequent month, count how many users from this cohort purchased
       const retention: Record<string, number> = {};
       for (let offset = 0; offset <= 5; offset++) {
         const d = new Date(month + "-01T00:00:00Z");
         d.setMonth(d.getMonth() + offset);
         const targetMonth = d.toISOString().slice(0, 7);
 
-        const purchasingUsers = new Set<string>();
-        for (const order of allOrders) {
-          if (!order.userId) continue;
-          const orderMonth = order.createdAt.toISOString().slice(0, 7);
-          if (orderMonth === targetMonth && userSet.has(order.userId)) {
-            purchasingUsers.add(order.userId);
+        // O(cohort_size) lookup instead of O(all_orders)
+        const monthOrders = ordersByMonth.get(targetMonth);
+        let purchasingCount = 0;
+        if (monthOrders) {
+          for (const uid of userSet) {
+            if (monthOrders.has(uid)) purchasingCount++;
           }
         }
+
         retention["month_" + offset] =
           cohort.signupCount > 0
-            ? Math.round(
-                (purchasingUsers.size / cohort.signupCount) * 1000
-              ) / 10
+            ? Math.round((purchasingCount / cohort.signupCount) * 1000) / 10
             : 0;
       }
 
@@ -427,41 +488,45 @@ async function handleCustomers(startDate: Date) {
   // Repeat rate by month trend
   const repeatRateByMonth: Array<{ month: string; rate: number }> = [];
   for (const month of recentMonths) {
-    const monthStart = new Date(month + "-01T00:00:00Z");
-    const monthEnd = new Date(month + "-01T00:00:00Z");
-    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    const monthOrders = ordersByMonth.get(month);
+    if (!monthOrders) {
+      repeatRateByMonth.push({ month, rate: 0 });
+      continue;
+    }
 
-    const monthOrders = allOrders.filter(
-      (o) => o.createdAt >= monthStart && o.createdAt < monthEnd && o.userId
-    );
-
-    const userOrders = new Map<string, number>();
-    for (const o of monthOrders) {
-      if (o.userId) {
-        userOrders.set(o.userId, (userOrders.get(o.userId) || 0) + 1);
+    // Count orders per user this month
+    const userOrderCounts = new Map<string, number>();
+    for (const order of allOrders) {
+      if (!order.userId) continue;
+      const orderMonth = order.createdAt.toISOString().slice(0, 7);
+      if (orderMonth === month) {
+        userOrderCounts.set(
+          order.userId,
+          (userOrderCounts.get(order.userId) || 0) + 1
+        );
       }
     }
 
     let repeats = 0;
-    for (const count of userOrders.values()) {
+    for (const count of userOrderCounts.values()) {
       if (count > 1) repeats++;
     }
 
     repeatRateByMonth.push({
       month,
       rate:
-        userOrders.size > 0
-          ? Math.round((repeats / userOrders.size) * 1000) / 10
+        userOrderCounts.size > 0
+          ? Math.round((repeats / userOrderCounts.size) * 1000) / 10
           : 0,
     });
   }
 
-  return success({
+  return {
     avgLtv,
     repeatRate,
     totalCustomers: allUsersWithOrders.length,
     ltvDistribution,
     cohorts,
     repeatRateByMonth,
-  });
+  };
 }
