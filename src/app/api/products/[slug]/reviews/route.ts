@@ -13,6 +13,7 @@ import { createNotification } from "@/lib/notifications";
 import { z } from "zod";
 
 const createReviewSchema = z.object({
+  orderItemId: z.string().min(1),
   rating: z.number().int().min(1).max(5),
   title: z.string().min(1).max(200).optional(),
   text: z.string().min(1).max(5000),
@@ -145,6 +146,28 @@ export async function POST(
       );
     }
 
+    // Verify the order-item belongs to this user, matches the product, and hasn't been reviewed
+    const orderItem = await prisma.orderItem.findUnique({
+      where: { id: parsed.data.orderItemId },
+      include: {
+        order: { select: { userId: true, status: true } },
+        review: { select: { id: true } },
+      },
+    });
+
+    if (!orderItem || orderItem.order.userId !== session.user.id) {
+      return badRequest("Invalid order item");
+    }
+    if (orderItem.order.status === "cancelled") {
+      return badRequest("Cannot review items from cancelled orders");
+    }
+    if (orderItem.productId !== product.id) {
+      return badRequest("Order item does not match this product");
+    }
+    if (orderItem.review) {
+      return badRequest("You have already reviewed this purchase");
+    }
+
     // Get user info for customerName
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
@@ -154,30 +177,17 @@ export async function POST(
     const customerName =
       user?.name || user?.email?.split("@")[0] || "Anonymous";
 
-    // Check if user has purchased this product (verified purchase)
-    const hasPurchased = await prisma.orderItem.findFirst({
-      where: {
-        productId: product.id,
-        order: {
-          userId: session.user.id,
-          status: { not: "cancelled" },
-        },
-      },
-      select: { id: true },
-    });
-
-    const verified = !!hasPurchased;
-
-    // Create the review
+    // Create the review (always verified — purchase is proven)
     const review = await prisma.review.create({
       data: {
         productId: product.id,
         userId: session.user.id,
+        orderItemId: parsed.data.orderItemId,
         customerName,
         rating: parsed.data.rating,
         title: parsed.data.title || null,
         text: parsed.data.text,
-        verified,
+        verified: true,
       },
       include: {
         product: {
@@ -190,6 +200,24 @@ export async function POST(
         },
       },
     });
+
+    // Award 100 reward points ($1 credit) — fire-and-forget
+    prisma
+      .$transaction(async (tx) => {
+        await tx.credit.create({
+          data: {
+            userId: session.user.id,
+            amount: 100,
+            type: "earned",
+            reason: `Review reward — ${product.name}`,
+          },
+        });
+        await tx.user.update({
+          where: { id: session.user.id },
+          data: { creditBalance: { increment: 100 } },
+        });
+      })
+      .catch((e) => console.error("Review reward error:", e));
 
     // Fire-and-forget notification for admin
     createNotification(

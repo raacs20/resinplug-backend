@@ -184,6 +184,7 @@ model OrderItem {
   weight       String
   unitPrice    Decimal @db.Decimal(10, 2)
   quantity     Int
+  review       Review? // Reverse relation: one review per order-item
 
   @@index([orderId])
 }
@@ -258,20 +259,22 @@ model SiteSetting {
 // ── Reviews ──
 
 model Review {
-  id           String   @id @default(cuid())
+  id           String     @id @default(cuid())
   productId    String
-  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
   userId       String?
-  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user         User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  orderItemId  String?    @unique // Ties review to a specific order-item purchase
+  orderItem    OrderItem? @relation(fields: [orderItemId], references: [id], onDelete: SetNull)
   customerName String
   rating       Int
   title        String?
   text         String
-  verified     Boolean  @default(false)
-  helpfulCount Int      @default(0)
+  verified     Boolean    @default(false)
+  helpfulCount Int        @default(0)
   photoUrl     String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   @@index([productId])
   @@index([userId])
