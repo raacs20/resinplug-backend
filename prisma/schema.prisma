@@ -444,6 +444,29 @@ model FAQ {
   updatedAt DateTime @updatedAt
 }
 
+// -- Analytics Events --
+
+model AnalyticsEvent {
+  id          String   @id @default(cuid())
+  event       String   // "page_view", "view_item", "add_to_cart", "begin_checkout", "purchase"
+  url         String?
+  pageTitle   String?
+  productId   String?
+  productName String?
+  category    String?
+  value       Float?
+  sessionId   String
+  userId      String?
+  userAgent   String?
+  referrer    String?
+  metadata    String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
 // -- Stock Movements --
 
 model StockMovement {
