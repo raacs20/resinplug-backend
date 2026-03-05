@@ -59,7 +59,8 @@ export async function GET(req: NextRequest) {
     else if (type === "funnel") result = await handleFunnel(days, startDate);
     else if (type === "geo") result = await handleGeo(startDate);
     else if (type === "customers") result = await handleCustomers(startDate);
-    else return badRequest("Invalid type. Use: traffic, funnel, geo, customers");
+    else if (type === "sources") result = await handleSources(days, startDate);
+    else return badRequest("Invalid type. Use: traffic, funnel, geo, customers, sources");
 
     setCache(cacheKey, result);
     return success(result);
@@ -528,5 +529,245 @@ async function handleCustomers(startDate: Date) {
     ltvDistribution,
     cohorts,
     repeatRateByMonth,
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Traffic Sources — parses referrer URLs into friendly source names
+   ══════════════════════════════════════════════════════════════════════ */
+const SOURCE_MAP: Record<string, string> = {
+  "google.com": "Google",
+  "www.google.com": "Google",
+  "google.ca": "Google",
+  "www.google.ca": "Google",
+  "bing.com": "Bing",
+  "www.bing.com": "Bing",
+  "facebook.com": "Facebook",
+  "www.facebook.com": "Facebook",
+  "m.facebook.com": "Facebook",
+  "l.facebook.com": "Facebook",
+  "lm.facebook.com": "Facebook",
+  "instagram.com": "Instagram",
+  "www.instagram.com": "Instagram",
+  "l.instagram.com": "Instagram",
+  "twitter.com": "X (Twitter)",
+  "www.twitter.com": "X (Twitter)",
+  "t.co": "X (Twitter)",
+  "x.com": "X (Twitter)",
+  "www.x.com": "X (Twitter)",
+  "tiktok.com": "TikTok",
+  "www.tiktok.com": "TikTok",
+  "youtube.com": "YouTube",
+  "www.youtube.com": "YouTube",
+  "m.youtube.com": "YouTube",
+  "reddit.com": "Reddit",
+  "www.reddit.com": "Reddit",
+  "old.reddit.com": "Reddit",
+  "duckduckgo.com": "DuckDuckGo",
+  "www.duckduckgo.com": "DuckDuckGo",
+  "pinterest.com": "Pinterest",
+  "www.pinterest.com": "Pinterest",
+  "linkedin.com": "LinkedIn",
+  "www.linkedin.com": "LinkedIn",
+};
+
+const INTERNAL_DOMAINS = ["localhost", "127.0.0.1", "resinplug"];
+
+function isInternalReferrer(domain: string): boolean {
+  return INTERNAL_DOMAINS.some((d) => domain.includes(d));
+}
+
+function mapSourceName(domain: string): string {
+  return SOURCE_MAP[domain] || domain;
+}
+
+async function handleSources(days: number, startDate: Date) {
+  // Query 1: Group page_view referrers by extracted domain
+  const referrerRows = await prisma.$queryRaw<
+    Array<{ domain: string | null; sessions: bigint; page_views: bigint }>
+  >`
+    SELECT
+      CASE
+        WHEN referrer IS NULL OR referrer = '' THEN NULL
+        ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
+      END as domain,
+      COUNT(DISTINCT "sessionId") as sessions,
+      COUNT(*) as page_views
+    FROM "AnalyticsEvent"
+    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+    GROUP BY domain
+    ORDER BY sessions DESC
+  `;
+
+  // Query 2: Total unique sessions
+  const totalSessionsRow = await prisma.$queryRaw<[{ count: bigint }]>`
+    SELECT COUNT(DISTINCT "sessionId") as count
+    FROM "AnalyticsEvent"
+    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+  `;
+  const totalSessions = Number(totalSessionsRow[0]?.count ?? 0);
+
+  // Query 3: Sessions that led to a purchase — get each session's earliest referrer
+  const purchaseSessionsRaw = await prisma.$queryRaw<
+    Array<{ domain: string | null; purchase_sessions: bigint }>
+  >`
+    SELECT
+      sub.domain,
+      COUNT(*) as purchase_sessions
+    FROM (
+      SELECT DISTINCT ON (p."sessionId")
+        p."sessionId",
+        CASE
+          WHEN pv.referrer IS NULL OR pv.referrer = '' THEN NULL
+          ELSE LOWER(SUBSTRING(pv.referrer FROM '://([^/]+)'))
+        END as domain
+      FROM "AnalyticsEvent" p
+      INNER JOIN "AnalyticsEvent" pv
+        ON p."sessionId" = pv."sessionId"
+        AND pv.event = 'page_view'
+        AND pv."createdAt" >= ${startDate}
+      WHERE p.event = 'purchase' AND p."createdAt" >= ${startDate}
+      ORDER BY p."sessionId", pv."createdAt" ASC
+    ) sub
+    GROUP BY sub.domain
+  `;
+  const purchaseMap = new Map(
+    purchaseSessionsRaw.map((r) => [r.domain, Number(r.purchase_sessions)])
+  );
+
+  // Query 4: Daily breakdown by domain (for trend chart)
+  const dailyRows = await prisma.$queryRaw<
+    Array<{ day: string; domain: string | null; sessions: bigint }>
+  >`
+    SELECT
+      TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
+      CASE
+        WHEN referrer IS NULL OR referrer = '' THEN NULL
+        ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
+      END as domain,
+      COUNT(DISTINCT "sessionId") as sessions
+    FROM "AnalyticsEvent"
+    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+    GROUP BY day, domain
+    ORDER BY day
+  `;
+
+  // Merge raw domains into friendly source names
+  const sourceAgg = new Map<
+    string,
+    { sessions: number; pageViews: number; purchaseSessions: number }
+  >();
+  let directSessions = 0;
+
+  for (const row of referrerRows) {
+    const sessions = Number(row.sessions);
+    const pageViews = Number(row.page_views);
+
+    if (!row.domain) {
+      directSessions += sessions;
+      const existing = sourceAgg.get("Direct");
+      if (existing) {
+        existing.sessions += sessions;
+        existing.pageViews += pageViews;
+      } else {
+        sourceAgg.set("Direct", {
+          sessions,
+          pageViews,
+          purchaseSessions: purchaseMap.get(null) || 0,
+        });
+      }
+      continue;
+    }
+
+    if (isInternalReferrer(row.domain)) continue;
+
+    const sourceName = mapSourceName(row.domain);
+    const existing = sourceAgg.get(sourceName);
+    const ps = purchaseMap.get(row.domain) || 0;
+
+    if (existing) {
+      existing.sessions += sessions;
+      existing.pageViews += pageViews;
+      existing.purchaseSessions += ps;
+    } else {
+      sourceAgg.set(sourceName, { sessions, pageViews, purchaseSessions: ps });
+    }
+  }
+
+  // Build sorted sources array (top 20)
+  const sources = Array.from(sourceAgg.entries())
+    .map(([source, stats]) => ({
+      source,
+      sessions: stats.sessions,
+      pageViews: stats.pageViews,
+      conversionRate:
+        stats.sessions > 0
+          ? Math.round((stats.purchaseSessions / stats.sessions) * 1000) / 10
+          : 0,
+      percentage:
+        totalSessions > 0
+          ? Math.round((stats.sessions / totalSessions) * 1000) / 10
+          : 0,
+    }))
+    .sort((a, b) => b.sessions - a.sessions)
+    .slice(0, 20);
+
+  // Pie chart data (top 8)
+  const pieData = sources.slice(0, 8).map((s) => ({
+    name: s.source,
+    value: s.sessions,
+  }));
+
+  // Daily trend for top 5 sources
+  const top5Sources = sources.slice(0, 5).map((s) => s.source);
+
+  const dailyMap = new Map<string, Record<string, number>>();
+  const now = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setUTCDate(d.getUTCDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const record: Record<string, number> = {};
+    for (const src of top5Sources) record[src] = 0;
+    dailyMap.set(key, record);
+  }
+
+  for (const row of dailyRows) {
+    const dayData = dailyMap.get(row.day);
+    if (!dayData) continue;
+
+    let sourceName: string;
+    if (!row.domain) {
+      sourceName = "Direct";
+    } else if (isInternalReferrer(row.domain)) {
+      continue;
+    } else {
+      sourceName = mapSourceName(row.domain);
+    }
+
+    if (top5Sources.includes(sourceName)) {
+      dayData[sourceName] = (dayData[sourceName] || 0) + Number(row.sessions);
+    }
+  }
+
+  const sourcesByDay = Array.from(dailyMap.entries()).map(([date, counts]) => ({
+    date,
+    ...counts,
+  }));
+
+  const topSource = sources[0]?.source || "N/A";
+  const directPct =
+    totalSessions > 0
+      ? Math.round((directSessions / totalSessions) * 1000) / 10
+      : 0;
+
+  return {
+    totalSessions,
+    topSource,
+    directPct,
+    sources,
+    pieData,
+    sourcesByDay,
+    top5Sources,
   };
 }

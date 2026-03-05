@@ -55,6 +55,7 @@ import {
   DollarSign,
   RefreshCw,
   Download,
+  Link2,
 } from "lucide-react";
 import { exportToCSV } from "@/lib/csv-export";
 
@@ -108,6 +109,24 @@ interface CustomersData {
   ltvDistribution: Array<{ tier: string; customers: number }>;
   cohorts: CohortRow[];
   repeatRateByMonth: Array<{ month: string; rate: number }>;
+}
+
+interface SourceRow {
+  source: string;
+  sessions: number;
+  pageViews: number;
+  conversionRate: number;
+  percentage: number;
+}
+
+interface SourcesData {
+  totalSessions: number;
+  topSource: string;
+  directPct: number;
+  sources: SourceRow[];
+  pieData: Array<{ name: string; value: number }>;
+  sourcesByDay: Array<Record<string, unknown>>;
+  top5Sources: string[];
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -173,6 +192,19 @@ const ltvChartConfig: ChartConfig = {
 const repeatRateConfig: ChartConfig = {
   rate: { label: "Repeat Rate %", color: "#22C55E" },
 };
+
+const SOURCE_COLORS = [
+  "#EC691B", "#3B82F6", "#22C55E", "#A855F7", "#EF4444",
+  "#F59E0B", "#06B6D4", "#EC4899",
+];
+
+function buildSourcesTrendConfig(sources: string[]): ChartConfig {
+  const config: ChartConfig = {};
+  sources.forEach((src, i) => {
+    config[src] = { label: src, color: SOURCE_COLORS[i % SOURCE_COLORS.length] };
+  });
+  return config;
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    Loading Skeleton
@@ -1018,6 +1050,245 @@ function CustomersTab({ data }: { data: CustomersData | null }) {
    Main Analytics Page
    ══════════════════════════════════════════════════════════════════════ */
 
+/* ══════════════════════════════════════════════════════════════════════
+   Sources Tab
+   ══════════════════════════════════════════════════════════════════════ */
+
+function SourcesTab({
+  data,
+  range,
+}: {
+  data: SourcesData | null;
+  range: string;
+}) {
+  if (!data) return <AnalyticsLoading />;
+
+  const rangeLabel = RANGES.find((r) => r.value === range)?.label || "30 Days";
+  const trendConfig = buildSourcesTrendConfig(data.top5Sources);
+
+  function handleExport() {
+    if (!data) return;
+    exportToCSV(
+      data.sources as unknown as Record<string, unknown>[],
+      "traffic-sources",
+      [
+        { key: "source", label: "Source" },
+        { key: "sessions", label: "Sessions" },
+        { key: "pageViews", label: "Page Views" },
+        { key: "conversionRate", label: "Conversion Rate %" },
+        { key: "percentage", label: "% of Total" },
+      ]
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Button variant="outline" size="sm" onClick={handleExport}>
+          <Download className="mr-2 h-4 w-4" />
+          Export CSV
+        </Button>
+      </div>
+
+      {/* Stat Cards */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Total Sessions
+            </CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {data.totalSessions.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">Last {rangeLabel}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Top Source</CardTitle>
+            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{data.topSource}</div>
+            <p className="text-xs text-muted-foreground">Most sessions</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Direct Traffic
+            </CardTitle>
+            <Link2 className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{data.directPct}%</div>
+            <p className="text-xs text-muted-foreground">No referrer</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Charts */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Source Distribution</CardTitle>
+            <CardDescription>Sessions by source (top 8)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.pieData.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">
+                No source data yet
+              </p>
+            ) : (
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={data.pieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={110}
+                      paddingAngle={3}
+                      dataKey="value"
+                      nameKey="name"
+                    >
+                      {data.pieData.map((_, index) => (
+                        <Cell
+                          key={index}
+                          fill={SOURCE_COLORS[index % SOURCE_COLORS.length]}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                        color: "hsl(var(--foreground))",
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Sources Over Time</CardTitle>
+            <CardDescription>Daily sessions — top 5 sources</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.sourcesByDay.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">
+                No trend data yet
+              </p>
+            ) : (
+              <ChartContainer
+                config={trendConfig}
+                className="h-[300px] w-full"
+              >
+                <AreaChart
+                  data={data.sourcesByDay}
+                  margin={{ top: 5, right: 10, left: 10, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    className="stroke-muted"
+                  />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={fmtDate}
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                  />
+                  <YAxis
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  {data.top5Sources.map((src, i) => (
+                    <Area
+                      key={src}
+                      type="monotone"
+                      dataKey={src}
+                      stroke={SOURCE_COLORS[i]}
+                      fill={SOURCE_COLORS[i]}
+                      fillOpacity={0.1}
+                      strokeWidth={2}
+                    />
+                  ))}
+                </AreaChart>
+              </ChartContainer>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Sources Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All Sources</CardTitle>
+          <CardDescription>Sorted by sessions</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-12">#</TableHead>
+                <TableHead>Source</TableHead>
+                <TableHead className="text-right">Sessions</TableHead>
+                <TableHead className="text-right">Page Views</TableHead>
+                <TableHead className="text-right">Conv. Rate</TableHead>
+                <TableHead className="text-right">% of Total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.sources.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="text-center text-muted-foreground py-8"
+                  >
+                    No source data yet
+                  </TableCell>
+                </TableRow>
+              ) : (
+                data.sources.map((src, i) => (
+                  <TableRow key={src.source}>
+                    <TableCell className="font-medium text-muted-foreground">
+                      {i + 1}
+                    </TableCell>
+                    <TableCell className="font-medium">{src.source}</TableCell>
+                    <TableCell className="text-right">
+                      {src.sessions.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {src.pageViews.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {src.conversionRate}%
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {src.percentage}%
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function AnalyticsPage() {
   const [range, setRange] = useState("30");
   const [activeTab, setActiveTab] = useState("traffic");
@@ -1029,6 +1300,7 @@ export default function AnalyticsPage() {
   const [customersData, setCustomersData] = useState<CustomersData | null>(
     null
   );
+  const [sourcesData, setSourcesData] = useState<SourcesData | null>(null);
 
   const fetchData = useCallback(async (tab: string, dateRange: string) => {
     setLoading(true);
@@ -1044,6 +1316,7 @@ export default function AnalyticsPage() {
       else if (tab === "funnel") setFunnelData(d);
       else if (tab === "geo") setGeoData(d);
       else if (tab === "customers") setCustomersData(d);
+      else if (tab === "sources") setSourcesData(d);
     } catch (err) {
       console.error("Failed to fetch analytics:", err);
     } finally {
@@ -1062,6 +1335,7 @@ export default function AnalyticsPage() {
     else if (activeTab === "funnel") setFunnelData(null);
     else if (activeTab === "geo") setGeoData(null);
     else if (activeTab === "customers") setCustomersData(null);
+    else if (activeTab === "sources") setSourcesData(null);
   }
 
   function handleTabChange(tab: string) {
@@ -1075,7 +1349,7 @@ export default function AnalyticsPage() {
         <div>
           <h2 className="text-lg font-semibold">Analytics</h2>
           <p className="text-sm text-muted-foreground">
-            Traffic, conversion, geographic &amp; customer insights
+            Traffic, conversion, geographic, customer &amp; source insights
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1110,11 +1384,12 @@ export default function AnalyticsPage() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-5">
           <TabsTrigger value="traffic">Traffic</TabsTrigger>
           <TabsTrigger value="funnel">Funnel</TabsTrigger>
           <TabsTrigger value="geo">Geographic</TabsTrigger>
           <TabsTrigger value="customers">Customers</TabsTrigger>
+          <TabsTrigger value="sources">Sources</TabsTrigger>
         </TabsList>
         <TabsContent value="traffic" className="mt-6">
           {loading && !trafficData ? (
@@ -1142,6 +1417,13 @@ export default function AnalyticsPage() {
             <AnalyticsLoading />
           ) : (
             <CustomersTab data={customersData} />
+          )}
+        </TabsContent>
+        <TabsContent value="sources" className="mt-6">
+          {loading && !sourcesData ? (
+            <AnalyticsLoading />
+          ) : (
+            <SourcesTab data={sourcesData} range={range} />
           )}
         </TabsContent>
       </Tabs>
