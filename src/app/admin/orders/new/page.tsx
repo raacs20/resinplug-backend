@@ -75,14 +75,14 @@ export default function NewOrderPage() {
       const res = await fetch("/api/admin/products?search=" + encodeURIComponent(query) + "&limit=10", { credentials: "include" });
       if (res.ok) {
         const json = await res.json();
-        const products = (json.data || []).map((p: any) => ({
-          id: p.id,
-          name: p.name,
-          slug: p.slug,
-          image: p.image,
-          salePrice: typeof p.salePrice === "string" ? parseFloat(p.salePrice.replace("$", "")) : Number(p.salePrice),
-          category: p.category,
-          variants: (p.variants || []).map((v: any) => ({ weight: v.weight, price: typeof v.price === "string" ? parseFloat(v.price.replace("$", "")) : Number(v.price) })),
+        const products = (json.data || []).map((p: Record<string, unknown>) => ({
+          id: p.id as string,
+          name: p.name as string,
+          slug: p.slug as string,
+          image: p.image as string,
+          salePrice: typeof p.salePrice === "string" ? parseFloat((p.salePrice as string).replace("$", "")) : Number(p.salePrice),
+          category: p.category as string,
+          variants: ((p.variants as Record<string, unknown>[]) || []).map((v) => ({ weight: v.weight as string, price: typeof v.price === "string" ? parseFloat((v.price as string).replace("$", "")) : Number(v.price) })),
         }));
         setProductResults(products);
       }
@@ -136,7 +136,7 @@ export default function NewOrderPage() {
 
     setSubmitting(true);
     try {
-      const payload: any = {
+      const payload: Record<string, unknown> = {
         customerEmail,
         customerName,
         items: items.map((i) => ({
@@ -167,8 +167,8 @@ export default function NewOrderPage() {
       const json = await res.json();
       toast.success("Order " + json.data.orderNumber + " created successfully");
       router.push("/admin/orders");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to create order");
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to create order");
     } finally { setSubmitting(false); }
   }
 

@@ -769,12 +769,12 @@ export default function EditProduct() {
         const products: RelatedProduct[] = (data.data || [])
           .filter((p: RelatedProduct) => p.id !== id)
           .filter((p: RelatedProduct) => !relatedProducts.some((rp) => rp.id === p.id))
-          .map((p: any) => ({
-            id: p.id,
-            name: p.name,
-            slug: p.slug,
-            image: p.image,
-            category: p.category,
+          .map((p: Record<string, unknown>) => ({
+            id: p.id as string,
+            name: p.name as string,
+            slug: p.slug as string,
+            image: p.image as string,
+            category: p.category as string,
             salePrice: Number(p.salePrice),
           }));
         setRelatedSearchResults(products);

@@ -94,7 +94,10 @@ export async function POST(req: NextRequest) {
       req.headers.get("x-real-ip") ||
       "unknown";
     if (isRateLimited(ip)) {
-      return NextResponse.json({ data: { ok: true } }); // silent drop
+      return NextResponse.json(
+        { error: { code: "RATE_LIMITED", message: "Too many requests" } },
+        { status: 429 }
+      );
     }
 
     const body = await req.json();

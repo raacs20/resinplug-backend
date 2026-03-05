@@ -68,6 +68,7 @@ model Variant {
   isActive      Boolean  @default(true)
 
   @@index([productId])
+  @@index([isActive])
 }
 
 model ProductImage {
@@ -172,6 +173,7 @@ model Order {
   @@index([userId])
   @@index([orderNumber])
   @@index([email])
+  @@index([status, createdAt])
 }
 
 model OrderItem {
@@ -501,4 +503,5 @@ model StockMovement {
   createdAt DateTime @default(now())
 
   @@index([productId])
+  @@index([createdAt])
 }

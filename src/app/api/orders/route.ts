@@ -9,9 +9,27 @@ import { createElement } from "react";
 import OrderPlaced from "@/emails/OrderPlaced";
 import { z } from "zod";
 
-const FREE_SHIPPING_THRESHOLD = 200;
-const SHIPPING_COST = 9.99;
-const POINTS_PER_DOLLAR = 100; // 100 points = $1 store credit
+// Defaults — overridden by SiteSetting values at runtime
+const DEFAULT_FREE_SHIPPING_THRESHOLD = 200;
+const DEFAULT_SHIPPING_COST = 9.99;
+const DEFAULT_POINTS_PER_DOLLAR = 100; // 100 points = $1 store credit
+
+async function getBusinessValues() {
+  const keys = [
+    "free_shipping_threshold",
+    "shipping_cost",
+    "points_per_dollar",
+  ] as const;
+  const settings = await prisma.siteSetting.findMany({
+    where: { key: { in: [...keys] } },
+  });
+  const map = new Map(settings.map((s) => [s.key, s.value]));
+  return {
+    freeShippingThreshold: parseFloat(map.get("free_shipping_threshold") || "") || DEFAULT_FREE_SHIPPING_THRESHOLD,
+    shippingCost: parseFloat(map.get("shipping_cost") || "") || DEFAULT_SHIPPING_COST,
+    pointsPerDollar: parseFloat(map.get("points_per_dollar") || "") || DEFAULT_POINTS_PER_DOLLAR,
+  };
+}
 
 const orderItemSchema = z.object({
   productId: z.string().optional(),
@@ -67,13 +85,16 @@ export async function POST(request: NextRequest) {
 
     const { items, rewardPointsUsed, ...orderData } = parsed.data;
 
+    // Load business values from SiteSetting (with hardcoded fallbacks)
+    const { freeShippingThreshold, shippingCost: configShippingCost, pointsPerDollar } = await getBusinessValues();
+
     // Calculate totals server-side (never trust client)
     const subtotal = items.reduce(
       (sum, item) => sum + item.unitPrice * item.quantity,
       0
     );
     const shippingCost =
-      subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_COST;
+      subtotal >= freeShippingThreshold ? 0 : configShippingCost;
 
     // Get authenticated user if logged in (optional for guest checkout)
     const session = await auth();
@@ -92,7 +113,7 @@ export async function POST(request: NextRequest) {
       if (!userRecord || Number(userRecord.creditBalance) < rewardPointsUsed) {
         return badRequest("Insufficient reward points");
       }
-      creditsDiscount = Math.round((rewardPointsUsed / POINTS_PER_DOLLAR) * 100) / 100;
+      creditsDiscount = Math.round((rewardPointsUsed / pointsPerDollar) * 100) / 100;
       // Don't let discount exceed the order total
       const maxTotal = subtotal + shippingCost;
       if (creditsDiscount > maxTotal) {

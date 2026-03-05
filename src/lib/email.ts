@@ -131,7 +131,11 @@ export async function sendEmail({
     if (!enabled) return { success: false };
   }
 
-  const from = process.env.EMAIL_FROM || "ResinPlug <onboarding@resend.dev>";
+  const from = process.env.EMAIL_FROM;
+  if (!from) {
+    console.error("EMAIL_FROM environment variable is not set — skipping email send");
+    return { success: false };
+  }
 
   try {
     const resend = getResend();

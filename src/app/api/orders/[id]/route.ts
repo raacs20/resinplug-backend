@@ -27,7 +27,14 @@ export async function GET(
         return forbidden("You do not have access to this order");
       }
     }
-    // Guest orders (no userId) are accessible by orderNumber lookup
+    // Guest orders require email verification to prevent enumeration
+    if (!order.userId) {
+      const url = new URL(_request.url);
+      const email = url.searchParams.get("email");
+      if (!email || email.toLowerCase() !== order.email.toLowerCase()) {
+        return notFound("Order not found");
+      }
+    }
 
     return success(serializeDecimals(order));
   } catch (err) {

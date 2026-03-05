@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { success, unauthorized, serverError } from "@/lib/api-response";
+import { success, unauthorized, forbidden, serverError } from "@/lib/api-response";
 import { calculateTier } from "@/lib/rewards";
 
 export async function GET() {
@@ -18,6 +18,7 @@ export async function GET() {
         email: true,
         phone: true,
         role: true,
+        isBanned: true,
         createdAt: true,
         creditBalance: true,
       },
@@ -25,6 +26,10 @@ export async function GET() {
 
     if (!user) {
       return unauthorized("User not found");
+    }
+
+    if (user.isBanned) {
+      return forbidden("Account suspended");
     }
 
     // Calculate lifetime earnings (sum of all "earned" type credits)

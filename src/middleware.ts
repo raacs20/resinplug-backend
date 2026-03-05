@@ -8,15 +8,14 @@ export function middleware(request: NextRequest) {
   }
 
   const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  const adminUrl = process.env.ADMIN_URL || "";
   const allowedOrigins = [
     frontendUrl,
     // Also allow 127.0.0.1 variant for local dev
     frontendUrl.replace("localhost", "127.0.0.1"),
-    // Production frontend
-    "https://resinplug-production.up.railway.app",
-    // Admin dashboard (local dev)
-    "http://localhost:3002",
-    "http://127.0.0.1:3002",
+    // Admin dashboard (from env)
+    adminUrl,
+    adminUrl ? adminUrl.replace("localhost", "127.0.0.1") : "",
   ].filter(Boolean);
 
   const origin = request.headers.get("origin") ?? "";
