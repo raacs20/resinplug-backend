@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const adminId = (session!.user as any).id;
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(adminId, "faq.create", "faq", faq.id, parsed.data.question).catch(() => {});
     return success(faq);
   } catch (err) {
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// PUT - update FAQ
+// PUT - update FAQ (validates with faqSchema.partial() to prevent mass assignment)
 export async function PUT(req: NextRequest) {
   const { error, session } = await requireAdmin();
   if (error) return error;
@@ -58,8 +58,11 @@ export async function PUT(req: NextRequest) {
     const { id, ...data } = body;
     if (!id) return badRequest("FAQ ID is required");
 
-    const faq = await prisma.fAQ.update({ where: { id }, data });
-    const adminId = (session!.user as any).id;
+    const parsed = faqSchema.partial().safeParse(data);
+    if (!parsed.success) return badRequest(parsed.error.errors[0].message);
+
+    const faq = await prisma.fAQ.update({ where: { id }, data: parsed.data });
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(adminId, "faq.update", "faq", faq.id).catch(() => {});
     return success(faq);
   } catch (err) {
@@ -76,7 +79,7 @@ export async function DELETE(req: NextRequest) {
     if (!id) return badRequest("FAQ ID is required");
 
     await prisma.fAQ.delete({ where: { id } });
-    const adminId = (session!.user as any).id;
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(adminId, "faq.delete", "faq", id).catch(() => {});
     return success({ deleted: true });
   } catch (err) {

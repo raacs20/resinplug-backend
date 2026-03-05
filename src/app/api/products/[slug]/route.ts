@@ -35,8 +35,9 @@ export async function GET(
 ) {
   try {
     const { slug } = await params;
-    const product = await prisma.product.findUnique({
-      where: { slug },
+    // Only return active products on the public endpoint
+    const product = await prisma.product.findFirst({
+      where: { slug, isActive: true },
       include: { variants: { orderBy: { sortOrder: "asc" } } },
     });
 

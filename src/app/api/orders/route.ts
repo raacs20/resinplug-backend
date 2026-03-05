@@ -8,6 +8,7 @@ import { sendEmail, resolveRecipients, getEmailContentWithDefaults } from "@/lib
 import { createElement } from "react";
 import OrderPlaced from "@/emails/OrderPlaced";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 
 // Defaults — overridden by SiteSetting values at runtime
 const DEFAULT_FREE_SHIPPING_THRESHOLD = 200;
@@ -15,19 +16,16 @@ const DEFAULT_SHIPPING_COST = 9.99;
 const DEFAULT_POINTS_PER_DOLLAR = 100; // 100 points = $1 store credit
 
 async function getBusinessValues() {
-  const keys = [
-    "free_shipping_threshold",
-    "shipping_cost",
-    "points_per_dollar",
-  ] as const;
+  // Keys must match what the admin Settings page writes (camelCase)
+  const keys = ["freeShippingThreshold", "shippingCost", "pointsPerDollar"] as const;
   const settings = await prisma.siteSetting.findMany({
     where: { key: { in: [...keys] } },
   });
   const map = new Map(settings.map((s) => [s.key, s.value]));
   return {
-    freeShippingThreshold: parseFloat(map.get("free_shipping_threshold") || "") || DEFAULT_FREE_SHIPPING_THRESHOLD,
-    shippingCost: parseFloat(map.get("shipping_cost") || "") || DEFAULT_SHIPPING_COST,
-    pointsPerDollar: parseFloat(map.get("points_per_dollar") || "") || DEFAULT_POINTS_PER_DOLLAR,
+    freeShippingThreshold: parseFloat(map.get("freeShippingThreshold") || "") || DEFAULT_FREE_SHIPPING_THRESHOLD,
+    shippingCost: parseFloat(map.get("shippingCost") || "") || DEFAULT_SHIPPING_COST,
+    pointsPerDollar: parseFloat(map.get("pointsPerDollar") || "") || DEFAULT_POINTS_PER_DOLLAR,
   };
 }
 
@@ -55,12 +53,14 @@ const createOrderSchema = z.object({
   paymentMethod: z.enum(["card", "etransfer", "applepay"]),
   notes: z.string().optional().default(""),
   rewardPointsUsed: z.number().int().min(0).optional().default(0),
+  couponCode: z.string().optional(),
 });
 
+/** Generate order number with 6 random alphanumeric chars (~2.2B combos/day) */
 function generateOrderNumber(): string {
   const date = new Date();
   const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
-  const randPart = Math.random().toString(36).substring(2, 5).toUpperCase();
+  const randPart = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `RP-${datePart}-${randPart}`;
 }
 
@@ -83,12 +83,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { items, rewardPointsUsed, ...orderData } = parsed.data;
+    const { items, rewardPointsUsed, couponCode, ...orderData } = parsed.data;
 
     // Load business values from SiteSetting (with hardcoded fallbacks)
     const { freeShippingThreshold, shippingCost: configShippingCost, pointsPerDollar } = await getBusinessValues();
 
-    // Calculate totals server-side (never trust client)
+    // Calculate subtotal server-side (never trust client)
     const subtotal = items.reduce(
       (sum, item) => sum + item.unitPrice * item.quantity,
       0
@@ -100,162 +100,243 @@ export async function POST(request: NextRequest) {
     const session = await auth();
     const userId = session?.user?.id ?? null;
 
-    // --- Validate and apply reward points discount ---
+    // --- Validate coupon (fast-fail before transaction) ---
+    let couponDiscount = 0;
+    let validatedCouponId: string | null = null;
+    if (couponCode) {
+      const coupon = await prisma.coupon.findUnique({
+        where: { code: couponCode.toUpperCase() },
+      });
+      if (!coupon || !coupon.isActive) {
+        return badRequest("Invalid or inactive coupon code");
+      }
+      if (coupon.expiresAt && new Date() > coupon.expiresAt) {
+        return badRequest("Coupon has expired");
+      }
+      if (coupon.maxUses && coupon.usedCount >= coupon.maxUses) {
+        return badRequest("Coupon usage limit reached");
+      }
+      if (coupon.minOrder && subtotal < Number(coupon.minOrder)) {
+        return badRequest(
+          `Minimum order of $${Number(coupon.minOrder).toFixed(2)} required for this coupon`
+        );
+      }
+      // Calculate discount amount
+      if (coupon.discountType === "percentage") {
+        couponDiscount =
+          Math.round(((subtotal * Number(coupon.discountValue)) / 100) * 100) /
+          100;
+      } else {
+        couponDiscount = Math.round(Number(coupon.discountValue) * 100) / 100;
+      }
+      // Cap coupon discount at subtotal
+      couponDiscount = Math.min(couponDiscount, subtotal);
+      validatedCouponId = coupon.id;
+    }
+
+    // --- Pre-validate reward points ---
     let creditsDiscount = 0;
     if (rewardPointsUsed > 0) {
       if (!userId) {
         return badRequest("Must be logged in to use reward points");
       }
-      const userRecord = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { creditBalance: true },
-      });
-      if (!userRecord || Number(userRecord.creditBalance) < rewardPointsUsed) {
-        return badRequest("Insufficient reward points");
-      }
-      creditsDiscount = Math.round((rewardPointsUsed / pointsPerDollar) * 100) / 100;
-      // Don't let discount exceed the order total
-      const maxTotal = subtotal + shippingCost;
-      if (creditsDiscount > maxTotal) {
-        creditsDiscount = maxTotal;
-      }
+      creditsDiscount =
+        Math.round((rewardPointsUsed / pointsPerDollar) * 100) / 100;
     }
 
-    const total = subtotal + shippingCost - creditsDiscount;
-
-    const order = await prisma.order.create({
-      data: {
-        orderNumber: generateOrderNumber(),
-        userId,
-        subtotal,
-        shippingCost,
-        total,
-        creditsUsed: creditsDiscount > 0 ? creditsDiscount : null,
-        firstName: orderData.firstName,
-        lastName: orderData.lastName,
-        country: orderData.country,
-        street1: orderData.street1,
-        street2: orderData.street2 || null,
-        city: orderData.city,
-        province: orderData.province,
-        postalCode: orderData.postalCode,
-        phone: orderData.phone,
-        email: orderData.email,
-        paymentMethod: orderData.paymentMethod,
-        notes: orderData.notes || null,
-        items: {
-          create: items.map((item) => ({
-            productId: item.productId || null,
-            productName: item.productName,
-            productImage: item.productImage,
-            weight: item.weight,
-            unitPrice: item.unitPrice,
-            quantity: item.quantity,
-          })),
-        },
-      },
-      include: { items: true },
-    });
-
-    // --- Auto stock deduction ---
-    // For each order item with a productId, deduct stock from the product
-    try {
-      for (const item of order.items) {
-        if (!item.productId) continue;
-
-        // Try to find the variant's gramsPerUnit first
-        const variant = await prisma.variant.findFirst({
-          where: {
-            productId: item.productId,
-            weight: item.weight,
-          },
-        });
-
-        let gramsToDeduct: number;
-        if (variant?.gramsPerUnit) {
-          gramsToDeduct = Number(variant.gramsPerUnit) * item.quantity;
-        } else {
-          // Estimate from weight string
-          const gramsPerUnit = parseGramsFromWeight(item.weight);
-          gramsToDeduct = gramsPerUnit * item.quantity;
-        }
-
-        if (gramsToDeduct > 0) {
-          await prisma.product.update({
-            where: { id: item.productId },
-            data: {
-              totalStockGrams: { decrement: gramsToDeduct },
-            },
-          });
-        }
-      }
-    } catch (stockErr) {
-      // Log but don't fail the order — stock deduction is best-effort
-      console.error("Stock deduction error:", stockErr);
+    // Ensure credits don't exceed remaining total after coupon
+    const maxCreditsDiscount = subtotal + shippingCost - couponDiscount;
+    if (creditsDiscount > maxCreditsDiscount) {
+      creditsDiscount = maxCreditsDiscount;
     }
 
-    // --- Create "created" OrderEvent ---
-    try {
-      await prisma.orderEvent.create({
-        data: {
-          orderId: order.id,
-          type: "created",
-          toValue: "processing",
-          note: `Order ${order.orderNumber} created`,
-        },
-      });
-    } catch (eventErr) {
-      console.error("OrderEvent creation error:", eventErr);
-    }
+    const total =
+      Math.round(
+        (subtotal + shippingCost - couponDiscount - creditsDiscount) * 100
+      ) / 100;
 
-    // --- Deduct reward points if used ---
-    if (rewardPointsUsed > 0 && userId) {
+    // --- Create order inside atomic transaction with retry for order number collisions ---
+    const MAX_RETRIES = 3;
+    let order: Awaited<ReturnType<typeof prisma.order.create>> | null = null;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const orderNumber = generateOrderNumber();
+
       try {
-        await prisma.$transaction(async (tx) => {
-          await tx.credit.create({
+        order = await prisma.$transaction(async (tx) => {
+          // 1. Lock user row and validate reward points balance atomically
+          if (rewardPointsUsed > 0 && userId) {
+            const rows = await tx.$queryRaw<{ creditBalance: unknown }[]>`
+              SELECT "creditBalance" FROM "User" WHERE id = ${userId} FOR UPDATE
+            `;
+            if (
+              rows.length === 0 ||
+              Number(rows[0].creditBalance) < rewardPointsUsed
+            ) {
+              throw new Error("INSUFFICIENT_POINTS");
+            }
+          }
+
+          // 2. Create the order
+          const newOrder = await tx.order.create({
             data: {
+              orderNumber,
               userId,
-              amount: rewardPointsUsed,
-              type: "spent",
-              reason: `Redeemed at checkout - Order #${order.orderNumber}`,
-              orderId: order.id,
+              subtotal,
+              shippingCost,
+              total,
+              couponCode: couponCode?.toUpperCase() || null,
+              discountAmount: couponDiscount > 0 ? couponDiscount : null,
+              creditsUsed: creditsDiscount > 0 ? creditsDiscount : null,
+              firstName: orderData.firstName,
+              lastName: orderData.lastName,
+              country: orderData.country,
+              street1: orderData.street1,
+              street2: orderData.street2 || null,
+              city: orderData.city,
+              province: orderData.province,
+              postalCode: orderData.postalCode,
+              phone: orderData.phone,
+              email: orderData.email,
+              paymentMethod: orderData.paymentMethod,
+              notes: orderData.notes || null,
+              items: {
+                create: items.map((item) => ({
+                  productId: item.productId || null,
+                  productName: item.productName,
+                  productImage: item.productImage,
+                  weight: item.weight,
+                  unitPrice: item.unitPrice,
+                  quantity: item.quantity,
+                })),
+              },
             },
+            include: { items: true },
           });
-          await tx.user.update({
-            where: { id: userId },
-            data: { creditBalance: { decrement: rewardPointsUsed } },
-          });
-        });
-      } catch (spendErr) {
-        console.error("Credit spend error:", spendErr);
-      }
-    }
 
-    // --- Award reward points (1 point per $1 spent, logged-in users only) ---
-    if (userId) {
-      try {
-        const pointsEarned = Math.floor(total); // 1 point per $1 (after discount)
-        if (pointsEarned > 0) {
-          await prisma.$transaction(async (tx) => {
+          // 3. Deduct stock atomically (guard against going negative)
+          for (const item of newOrder.items) {
+            if (!item.productId) continue;
+
+            const variant = await tx.variant.findFirst({
+              where: { productId: item.productId, weight: item.weight },
+            });
+
+            let gramsToDeduct: number;
+            if (variant?.gramsPerUnit) {
+              gramsToDeduct = Number(variant.gramsPerUnit) * item.quantity;
+            } else {
+              gramsToDeduct = parseGramsFromWeight(item.weight) * item.quantity;
+            }
+
+            if (gramsToDeduct > 0) {
+              // Only decrement if stock is sufficient (prevents negative stock)
+              const result = await tx.$queryRaw<{ id: string }[]>`
+                UPDATE "Product"
+                SET "totalStockGrams" = "totalStockGrams" - ${gramsToDeduct}
+                WHERE id = ${item.productId}
+                  AND "totalStockGrams" IS NOT NULL
+                  AND "totalStockGrams" >= ${gramsToDeduct}
+                RETURNING id
+              `;
+              if (result.length > 0) {
+                await tx.stockMovement.create({
+                  data: {
+                    productId: item.productId,
+                    type: "order_deduction",
+                    quantity: -gramsToDeduct,
+                    reason: `Order #${orderNumber}`,
+                    reference: newOrder.id,
+                  },
+                });
+              }
+            }
+          }
+
+          // 4. Increment coupon usage count
+          if (validatedCouponId) {
+            await tx.coupon.update({
+              where: { id: validatedCouponId },
+              data: { usedCount: { increment: 1 } },
+            });
+          }
+
+          // 5. Deduct reward points
+          if (rewardPointsUsed > 0 && userId) {
             await tx.credit.create({
               data: {
                 userId,
-                amount: pointsEarned,
-                type: "earned",
-                reason: `Purchase - Order #${order.orderNumber}`,
-                orderId: order.id,
+                amount: rewardPointsUsed,
+                type: "spent",
+                reason: `Redeemed at checkout - Order #${orderNumber}`,
+                orderId: newOrder.id,
               },
             });
             await tx.user.update({
               where: { id: userId },
-              data: { creditBalance: { increment: pointsEarned } },
+              data: { creditBalance: { decrement: rewardPointsUsed } },
             });
+          }
+
+          // 6. Award reward points (1 point per $1 spent, logged-in users only)
+          if (userId) {
+            const pointsEarned = Math.floor(total);
+            if (pointsEarned > 0) {
+              await tx.credit.create({
+                data: {
+                  userId,
+                  amount: pointsEarned,
+                  type: "earned",
+                  reason: `Purchase - Order #${orderNumber}`,
+                  orderId: newOrder.id,
+                },
+              });
+              await tx.user.update({
+                where: { id: userId },
+                data: { creditBalance: { increment: pointsEarned } },
+              });
+            }
+          }
+
+          // 7. Create "created" order event
+          await tx.orderEvent.create({
+            data: {
+              orderId: newOrder.id,
+              type: "created",
+              toValue: "processing",
+              note: `Order ${orderNumber} created`,
+            },
           });
+
+          return newOrder;
+        });
+
+        break; // Transaction succeeded, exit retry loop
+      } catch (err: unknown) {
+        lastError = err;
+
+        // Known business error: insufficient points
+        if (err instanceof Error && err.message === "INSUFFICIENT_POINTS") {
+          return badRequest("Insufficient reward points");
         }
-      } catch (rewardErr) {
-        // Log but don't fail the order — reward points are best-effort
-        console.error("Reward points error:", rewardErr);
+
+        // P2002 = unique constraint violation (order number collision) — retry
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002" &&
+          attempt < MAX_RETRIES - 1
+        ) {
+          continue;
+        }
+
+        throw err; // Re-throw unexpected errors
       }
+    }
+
+    if (!order) {
+      console.error("Order creation failed after retries:", lastError);
+      return serverError();
     }
 
     // Fire-and-forget notification for admin
@@ -275,9 +356,9 @@ export async function POST(request: NextRequest) {
               sendEmail({
                 type: "order_placed",
                 to,
-                subject: `Your ResinPlug Order #${order.orderNumber}`,
+                subject: `Your ResinPlug Order #${order!.orderNumber}`,
                 react: createElement(OrderPlaced, {
-                  orderNumber: order.orderNumber,
+                  orderNumber: order!.orderNumber,
                   firstName: orderData.firstName,
                   items: items.map((i) => ({
                     productName: i.productName,
@@ -288,7 +369,7 @@ export async function POST(request: NextRequest) {
                   subtotal,
                   shippingCost,
                   total,
-                  discountAmount: Number(order.discountAmount) || undefined,
+                  discountAmount: couponDiscount || undefined,
                   creditsUsed: creditsDiscount || undefined,
                   street1: orderData.street1,
                   street2: orderData.street2 || undefined,
@@ -300,7 +381,7 @@ export async function POST(request: NextRequest) {
                   customBody: content.body,
                   customButtonText: content.buttonText,
                 }),
-                orderId: order.id,
+                orderId: order!.id,
                 userId: userId || undefined,
               })
             )

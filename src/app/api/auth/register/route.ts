@@ -9,6 +9,30 @@ import WelcomeEmail from "@/emails/WelcomeEmail";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 
+/* ── Rate limiting: 3 registrations per IP per hour ── */
+const registerRateLimitMap = new Map<string, { count: number; reset: number }>();
+const REGISTER_RATE_WINDOW = 60 * 60 * 1000; // 1 hour
+const REGISTER_RATE_LIMIT = 3;
+
+function isRegisterRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = registerRateLimitMap.get(ip);
+  if (!entry || now >= entry.reset) {
+    registerRateLimitMap.set(ip, { count: 1, reset: now + REGISTER_RATE_WINDOW });
+    return false;
+  }
+  entry.count++;
+  return entry.count > REGISTER_RATE_LIMIT;
+}
+
+// Cleanup stale entries every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of registerRateLimitMap) {
+    if (now >= entry.reset) registerRateLimitMap.delete(ip);
+  }
+}, 10 * 60 * 1000);
+
 const registerSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   email: z.string().email().max(255),
@@ -18,6 +42,15 @@ const registerSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit by IP
+    const ip =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip") ||
+      "unknown";
+    if (isRegisterRateLimited(ip)) {
+      return badRequest("Too many registration attempts. Try again later.");
+    }
+
     const body = await request.json();
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) {

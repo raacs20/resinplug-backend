@@ -7,6 +7,14 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { logActivity } from "@/lib/activity-log";
 
+/** Generate order number with 6 random alphanumeric chars (~2.2B combos/day) */
+function generateOrderNumber(): string {
+  const date = new Date();
+  const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
+  const randPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `RP-${datePart}-${randPart}`;
+}
+
 export async function GET(request: NextRequest) {
   const { error } = await requireAdmin();
   if (error) return error;
@@ -102,53 +110,64 @@ export async function POST(req: NextRequest) {
     const shipping = applyShipping ? 9.99 : 0;
     const total = subtotal + shipping;
 
-    // Generate order number
-    const date = new Date();
-    const dateStr = date.toISOString().slice(0, 10).replace(/-/g, "");
-    const rand = Math.random().toString(36).substring(2, 5).toUpperCase();
-    const orderNumber = "RP-" + dateStr + "-" + rand;
-
     // Find or reference user
     const user = await prisma.user.findUnique({ where: { email: customerEmail } });
 
-    // Create order
-    const order = await prisma.order.create({
-      data: {
-        orderNumber,
-        userId: user?.id || null,
-        email: customerEmail,
-        firstName: shippingAddress?.firstName || customerName.split(" ")[0],
-        lastName: shippingAddress?.lastName || customerName.split(" ").slice(1).join(" ") || "",
-        street1: shippingAddress?.address || "",
-        city: shippingAddress?.city || "",
-        province: shippingAddress?.province || "",
-        postalCode: shippingAddress?.postalCode || "",
-        country: shippingAddress?.country || "Canada",
-        phone: shippingAddress?.phone || "",
-        subtotal,
-        shippingCost: shipping,
-        total,
-        status: "processing",
-        paymentMethod: "manual",
-        notes: notes || "Manual order created by admin",
-        items: {
-          create: items.map(item => ({
-            productId: item.productId || null,
-            productName: item.productName,
-            productImage: item.image || "",
-            weight: item.weight,
-            unitPrice: item.unitPrice,
-            quantity: item.quantity,
-          })),
-        },
-      },
-      include: { items: true },
-    });
+    // Create order with retry for order number collisions
+    let order: Awaited<ReturnType<typeof prisma.order.create>> | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const orderNumber = generateOrderNumber();
+      try {
+        order = await prisma.order.create({
+          data: {
+            orderNumber,
+            userId: user?.id || null,
+            email: customerEmail,
+            firstName: shippingAddress?.firstName || customerName.split(" ")[0],
+            lastName: shippingAddress?.lastName || customerName.split(" ").slice(1).join(" ") || "",
+            street1: shippingAddress?.address || "",
+            city: shippingAddress?.city || "",
+            province: shippingAddress?.province || "",
+            postalCode: shippingAddress?.postalCode || "",
+            country: shippingAddress?.country || "Canada",
+            phone: shippingAddress?.phone || "",
+            subtotal,
+            shippingCost: shipping,
+            total,
+            status: "processing",
+            paymentMethod: "manual",
+            notes: notes || "Manual order created by admin",
+            items: {
+              create: items.map(item => ({
+                productId: item.productId || null,
+                productName: item.productName,
+                productImage: item.image || "",
+                weight: item.weight,
+                unitPrice: item.unitPrice,
+                quantity: item.quantity,
+              })),
+            },
+          },
+          include: { items: true },
+        });
+        break; // Success
+      } catch (err) {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002" &&
+          attempt < 2
+        ) {
+          continue; // Retry with new order number
+        }
+        throw err;
+      }
+    }
+    if (!order) return serverError("Failed to create order after retries");
 
     // Create order event
     try {
-      const adminId = (session!.user as any).id;
-      const adminName = (session!.user as any).name || (session!.user as any).email;
+      const adminId = (session!.user as Record<string, unknown>).id as string;
+      const adminName = ((session!.user as Record<string, unknown>).name || (session!.user as Record<string, unknown>).email) as string;
       await prisma.orderEvent.create({
         data: {
           orderId: order.id,
@@ -158,7 +177,7 @@ export async function POST(req: NextRequest) {
           adminName,
         },
       });
-      await logActivity(adminId, "order.create", "order", order.id, "Manual order " + orderNumber).catch(() => {});
+      await logActivity(adminId, "order.create", "order", order.id, "Manual order " + order.orderNumber).catch(() => {});
     } catch {}
 
     return success(serializeDecimals(order));

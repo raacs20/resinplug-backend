@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+const isProduction = process.env.NODE_ENV === "production";
+
 export function middleware(request: NextRequest) {
-  // Only apply CORS to API routes
+  // Only apply to API routes
   if (!request.nextUrl.pathname.startsWith("/api")) {
     return NextResponse.next();
   }
@@ -19,7 +21,19 @@ export function middleware(request: NextRequest) {
   ].filter(Boolean);
 
   const origin = request.headers.get("origin") ?? "";
-  const isAllowed = allowedOrigins.includes(origin) || !origin;
+
+  // In production, require a valid Origin header. In dev, allow missing origin (curl, Postman).
+  const isAllowed = allowedOrigins.includes(origin) || (!isProduction && !origin);
+
+  // Security headers applied to all API responses
+  const securityHeaders: Record<string, string> = {
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+  };
+  if (isProduction) {
+    securityHeaders["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+  }
 
   // Handle preflight OPTIONS
   if (request.method === "OPTIONS") {
@@ -31,13 +45,19 @@ export function middleware(request: NextRequest) {
         "Access-Control-Allow-Headers": "Content-Type, Authorization",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Max-Age": "86400",
+        ...securityHeaders,
       },
     });
   }
 
   const response = NextResponse.next();
 
-  if (isAllowed) {
+  // Set security headers on all responses
+  for (const [key, value] of Object.entries(securityHeaders)) {
+    response.headers.set(key, value);
+  }
+
+  if (isAllowed && origin) {
     response.headers.set("Access-Control-Allow-Origin", origin);
     response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");

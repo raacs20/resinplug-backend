@@ -3,8 +3,44 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { encode } from "next-auth/jwt";
 
+/* ── Rate limiting: 5 attempts per IP per 15 minutes ── */
+const loginRateLimitMap = new Map<string, { count: number; reset: number }>();
+const LOGIN_RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
+const LOGIN_RATE_LIMIT = 5;
+
+function isLoginRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const entry = loginRateLimitMap.get(ip);
+  if (!entry || now >= entry.reset) {
+    loginRateLimitMap.set(ip, { count: 1, reset: now + LOGIN_RATE_WINDOW });
+    return false;
+  }
+  entry.count++;
+  return entry.count > LOGIN_RATE_LIMIT;
+}
+
+// Cleanup stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of loginRateLimitMap) {
+    if (now >= entry.reset) loginRateLimitMap.delete(ip);
+  }
+}, 5 * 60 * 1000);
+
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit by IP
+    const ip =
+      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      request.headers.get("x-real-ip") ||
+      "unknown";
+    if (isLoginRateLimited(ip)) {
+      return NextResponse.json(
+        { error: { message: "Too many login attempts. Try again later." } },
+        { status: 429 }
+      );
+    }
+
     const { email, password } = await request.json();
 
     if (!email || !password) {
@@ -78,22 +114,19 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Set cookie - try both cookie names for compatibility
+    // Cookie options must match auth.ts — sameSite:"none" in production for cross-origin
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax" as const,
+      secure: isProduction,
+      sameSite: isProduction ? ("none" as const) : ("lax" as const),
       path: "/",
       maxAge: 30 * 24 * 60 * 60,
     };
 
     response.cookies.set("next-auth.session-token", token, cookieOptions);
     // Also set the __Secure- prefixed version for production HTTPS
-    if (process.env.NODE_ENV === "production") {
-      response.cookies.set("__Secure-next-auth.session-token", token, {
-        ...cookieOptions,
-        secure: true,
-      });
+    if (isProduction) {
+      response.cookies.set("__Secure-next-auth.session-token", token, cookieOptions);
     }
 
     return response;

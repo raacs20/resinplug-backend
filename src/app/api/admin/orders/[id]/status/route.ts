@@ -54,6 +54,70 @@ export async function PATCH(
     const adminId = session!.user!.id!;
     const adminName = session!.user!.name || session!.user!.email || "Admin";
 
+    // --- Restore stock and refund credits on cancellation ---
+    if (status === "cancelled" && previousStatus !== "cancelled") {
+      try {
+        // Restore stock for each order item
+        for (const item of order.items) {
+          if (!item.productId) continue;
+          const gramsMatch = item.weight.match(/(\d+(?:\.\d+)?)\s*(?:g(?:ram)?s?)?/i);
+          const gramsPerUnit = gramsMatch ? parseFloat(gramsMatch[1]) : 0;
+          const gramsToRestore = gramsPerUnit * item.quantity;
+
+          if (gramsToRestore > 0) {
+            await prisma.product.update({
+              where: { id: item.productId },
+              data: { totalStockGrams: { increment: gramsToRestore } },
+            });
+            await prisma.stockMovement.create({
+              data: {
+                productId: item.productId,
+                type: "order_restore",
+                quantity: gramsToRestore,
+                reason: `Cancelled Order #${order.orderNumber}`,
+                reference: order.id,
+                adminName,
+              },
+            });
+          }
+        }
+
+        // Refund credits if any were used
+        if (existing.creditsUsed && Number(existing.creditsUsed) > 0 && existing.userId) {
+          const creditsToRefund = Number(existing.creditsUsed);
+          // Convert dollar discount back to points (creditsUsed stores dollar amount)
+          // Retrieve pointsPerDollar from settings
+          let pointsPerDollar = 100;
+          try {
+            const setting = await prisma.siteSetting.findUnique({
+              where: { key: "pointsPerDollar" },
+            });
+            if (setting) pointsPerDollar = parseFloat(setting.value) || 100;
+          } catch {}
+          const pointsToRefund = Math.round(creditsToRefund * pointsPerDollar);
+
+          await prisma.$transaction([
+            prisma.credit.create({
+              data: {
+                userId: existing.userId,
+                amount: pointsToRefund,
+                type: "refund",
+                reason: `Cancelled Order #${order.orderNumber}`,
+                orderId: order.id,
+              },
+            }),
+            prisma.user.update({
+              where: { id: existing.userId },
+              data: { creditBalance: { increment: pointsToRefund } },
+            }),
+          ]);
+        }
+      } catch (restoreErr) {
+        console.error("Stock/credit restore on cancel error:", restoreErr);
+        // Don't fail the status update — restoration is best-effort
+      }
+    }
+
     // Create order event for status change
     try {
       await prisma.orderEvent.create({
