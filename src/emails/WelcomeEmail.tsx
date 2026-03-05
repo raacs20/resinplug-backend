@@ -5,6 +5,9 @@ import EmailLayout from "./EmailLayout";
 interface WelcomeEmailProps {
   name?: string;
   email: string;
+  customHeading?: string;
+  customBody?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -12,16 +15,20 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
 export default function WelcomeEmail({
   name = "there",
   email = "customer@example.com",
+  customHeading,
+  customBody,
+  customButtonText,
 }: WelcomeEmailProps) {
   const displayName = name || "there";
+  const headingText = customHeading || "Welcome to ResinPlug! 🎉";
+  const bodyText = (customBody || "Hi {firstName}, thanks for creating an account with us! You're now part of the ResinPlug community.")
+    .replace(/\{firstName\}/g, displayName);
+  const btnText = customButtonText || "Start Shopping";
 
   return (
     <EmailLayout previewText="Welcome to ResinPlug!">
-      <Text style={heading}>Welcome to ResinPlug! 🎉</Text>
-      <Text style={paragraph}>
-        Hi {displayName}, thanks for creating an account with us! You&apos;re now
-        part of the ResinPlug community.
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
 
       <Section style={featureBox}>
         <Text style={featureTitle}>What you can do now:</Text>
@@ -33,14 +40,14 @@ export default function WelcomeEmail({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/shop`} style={ctaButton}>
-          Start Shopping
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
   );
 }
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

@@ -5,6 +5,10 @@ import EmailLayout from "./EmailLayout";
 interface OrderShippedProps {
   orderNumber: string;
   firstName: string;
+  customHeading?: string;
+  customBody?: string;
+  customBody2?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -12,18 +16,25 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
 export default function OrderShipped({
   orderNumber = "RP-20260305-ABC",
   firstName = "Customer",
+  customHeading,
+  customBody,
+  customBody2,
+  customButtonText,
 }: OrderShippedProps) {
+  const headingText = customHeading || "Your Order Has Shipped! 📦";
+  const bodyText = (customBody || "Hi {firstName}, great news! Your order {orderNumber} has been shipped and is on its way to you.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const body2Text = (customBody2 || "You'll receive another email with tracking information once it's available.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const btnText = customButtonText || "Track Your Order";
+
   return (
     <EmailLayout previewText={`Order ${orderNumber} has shipped!`}>
-      <Text style={heading}>Your Order Has Shipped! 📦</Text>
-      <Text style={paragraph}>
-        Hi {firstName}, great news! Your order <strong>{orderNumber}</strong> has
-        been shipped and is on its way to you.
-      </Text>
-      <Text style={paragraph}>
-        You&apos;ll receive another email with tracking information once it&apos;s
-        available.
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
+      <Text style={paragraph}>{body2Text}</Text>
 
       <Section style={orderBox}>
         <Text style={orderLabel}>Order Number</Text>
@@ -32,14 +43,14 @@ export default function OrderShipped({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/tracking`} style={ctaButton}>
-          Track Your Order
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
   );
 }
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

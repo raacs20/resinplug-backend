@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { requireAdmin } from "@/lib/admin";
-import { sendEmail } from "@/lib/email";
+import { sendEmail, getEmailContentWithDefaults } from "@/lib/email";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { createElement } from "react";
 
@@ -18,10 +18,12 @@ const SAMPLE_ORDER_ITEMS = [
   { productName: "Death Bubba", weight: "1g", quantity: 1, unitPrice: 10 },
 ];
 
-function getTestTemplate(type: string): {
+async function getTestTemplate(type: string): Promise<{
   subject: string;
   react: React.ReactElement;
-} | null {
+} | null> {
+  const content = await getEmailContentWithDefaults(type);
+
   switch (type) {
     case "order_placed":
       return {
@@ -38,6 +40,9 @@ function getTestTemplate(type: string): {
           province: "ON",
           postalCode: "M5V 1A1",
           country: "Canada",
+          customHeading: content.heading,
+          customBody: content.body,
+          customButtonText: content.buttonText,
         }),
       };
     case "order_shipped":
@@ -46,6 +51,10 @@ function getTestTemplate(type: string): {
         react: createElement(OrderShipped, {
           orderNumber: "RP-TEST-001",
           firstName: "Test",
+          customHeading: content.heading,
+          customBody: content.body,
+          customBody2: content.body2,
+          customButtonText: content.buttonText,
         }),
       };
     case "order_delivered":
@@ -54,6 +63,10 @@ function getTestTemplate(type: string): {
         react: createElement(OrderDelivered, {
           orderNumber: "RP-TEST-001",
           firstName: "Test",
+          customHeading: content.heading,
+          customBody: content.body,
+          customBody2: content.body2,
+          customButtonText: content.buttonText,
         }),
       };
     case "order_cancelled":
@@ -62,6 +75,10 @@ function getTestTemplate(type: string): {
         react: createElement(OrderCancelled, {
           orderNumber: "RP-TEST-001",
           firstName: "Test",
+          customHeading: content.heading,
+          customBody: content.body,
+          customBody2: content.body2,
+          customButtonText: content.buttonText,
         }),
       };
     case "tracking_update":
@@ -72,6 +89,9 @@ function getTestTemplate(type: string): {
           firstName: "Test",
           trackingNumber: "1Z999AA10123456784",
           carrierName: "Canada Post",
+          customHeading: content.heading,
+          customBody: content.body,
+          customButtonText: content.buttonText,
         }),
       };
     case "welcome":
@@ -80,6 +100,9 @@ function getTestTemplate(type: string): {
         react: createElement(WelcomeEmail, {
           name: "Test User",
           email: "test@example.com",
+          customHeading: content.heading,
+          customBody: content.body,
+          customButtonText: content.buttonText,
         }),
       };
     default:
@@ -97,7 +120,7 @@ export async function POST(request: NextRequest) {
 
     if (!type || !to) return badRequest("type and to are required");
 
-    const template = getTestTemplate(type);
+    const template = await getTestTemplate(type);
     if (!template) return badRequest("Invalid email type");
 
     const result = await sendEmail({

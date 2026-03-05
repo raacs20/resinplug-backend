@@ -24,6 +24,10 @@ interface OrderPlacedProps {
   province: string;
   postalCode: string;
   country: string;
+  // Content overrides
+  customHeading?: string;
+  customBody?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -45,14 +49,20 @@ export default function OrderPlaced({
   province = "ON",
   postalCode = "M5V 1A1",
   country = "Canada",
+  customHeading,
+  customBody,
+  customButtonText,
 }: OrderPlacedProps) {
+  const headingText = customHeading || "Order Confirmed! 🎉";
+  const bodyText = (customBody || "Hi {firstName}, thank you for your order! We've received your order and are getting it ready.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const btnText = customButtonText || "Track Your Order";
+
   return (
     <EmailLayout previewText={`Order ${orderNumber} confirmed!`}>
-      <Text style={heading}>Order Confirmed! 🎉</Text>
-      <Text style={paragraph}>
-        Hi {firstName}, thank you for your order! We&apos;ve received your order
-        and are getting it ready.
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
 
       <Section style={orderBox}>
         <Text style={orderLabel}>Order Number</Text>
@@ -121,7 +131,7 @@ export default function OrderPlaced({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/tracking`} style={ctaButton}>
-          Track Your Order
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
@@ -130,7 +140,7 @@ export default function OrderPlaced({
 
 /* ── Styles ── */
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

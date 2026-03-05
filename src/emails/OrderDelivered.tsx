@@ -5,6 +5,10 @@ import EmailLayout from "./EmailLayout";
 interface OrderDeliveredProps {
   orderNumber: string;
   firstName: string;
+  customHeading?: string;
+  customBody?: string;
+  customBody2?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -12,18 +16,25 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
 export default function OrderDelivered({
   orderNumber = "RP-20260305-ABC",
   firstName = "Customer",
+  customHeading,
+  customBody,
+  customBody2,
+  customButtonText,
 }: OrderDeliveredProps) {
+  const headingText = customHeading || "Your Order Has Been Delivered! ✅";
+  const bodyText = (customBody || "Hi {firstName}, your order {orderNumber} has been delivered. We hope you love your new products!")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const body2Text = (customBody2 || "If you have a moment, we'd love to hear what you think. Leave a review and earn 100 reward points!")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const btnText = customButtonText || "Leave a Review";
+
   return (
     <EmailLayout previewText={`Order ${orderNumber} has been delivered!`}>
-      <Text style={heading}>Your Order Has Been Delivered! ✅</Text>
-      <Text style={paragraph}>
-        Hi {firstName}, your order <strong>{orderNumber}</strong> has been
-        delivered. We hope you love your new products!
-      </Text>
-      <Text style={paragraph}>
-        If you have a moment, we&apos;d love to hear what you think. Leave a
-        review and earn <strong style={{ color: "#EC691B" }}>100 reward points</strong>!
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
+      <Text style={paragraph}>{body2Text}</Text>
 
       <Section style={orderBox}>
         <Text style={orderLabel}>Order Number</Text>
@@ -32,14 +43,14 @@ export default function OrderDelivered({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/reviews`} style={ctaButton}>
-          Leave a Review
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
   );
 }
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

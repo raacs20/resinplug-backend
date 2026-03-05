@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { success, badRequest, unauthorized, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { createNotification } from "@/lib/notifications";
-import { sendEmail, resolveRecipients } from "@/lib/email";
+import { sendEmail, resolveRecipients, getEmailContentWithDefaults } from "@/lib/email";
 import { createElement } from "react";
 import OrderPlaced from "@/emails/OrderPlaced";
 import { z } from "zod";
@@ -246,38 +246,43 @@ export async function POST(request: NextRequest) {
     ).catch((e) => console.error("Notification error:", e));
 
     // Fire-and-forget order confirmation email
-    resolveRecipients("order_placed", orderData.email)
-      .then((recipients) =>
-        Promise.all(
-          recipients.map((to) =>
-            sendEmail({
-              type: "order_placed",
-              to,
-              subject: `Your ResinPlug Order #${order.orderNumber}`,
-              react: createElement(OrderPlaced, {
-                orderNumber: order.orderNumber,
-                firstName: orderData.firstName,
-                items: items.map((i) => ({
-                  productName: i.productName,
-                  weight: i.weight,
-                  quantity: i.quantity,
-                  unitPrice: i.unitPrice,
-                })),
-                subtotal,
-                shippingCost,
-                total,
-                discountAmount: Number(order.discountAmount) || undefined,
-                creditsUsed: creditsDiscount || undefined,
-                street1: orderData.street1,
-                street2: orderData.street2 || undefined,
-                city: orderData.city,
-                province: orderData.province,
-                postalCode: orderData.postalCode,
-                country: orderData.country,
-              }),
-              orderId: order.id,
-              userId: userId || undefined,
-            })
+    getEmailContentWithDefaults("order_placed")
+      .then((content) =>
+        resolveRecipients("order_placed", orderData.email).then((recipients) =>
+          Promise.all(
+            recipients.map((to) =>
+              sendEmail({
+                type: "order_placed",
+                to,
+                subject: `Your ResinPlug Order #${order.orderNumber}`,
+                react: createElement(OrderPlaced, {
+                  orderNumber: order.orderNumber,
+                  firstName: orderData.firstName,
+                  items: items.map((i) => ({
+                    productName: i.productName,
+                    weight: i.weight,
+                    quantity: i.quantity,
+                    unitPrice: i.unitPrice,
+                  })),
+                  subtotal,
+                  shippingCost,
+                  total,
+                  discountAmount: Number(order.discountAmount) || undefined,
+                  creditsUsed: creditsDiscount || undefined,
+                  street1: orderData.street1,
+                  street2: orderData.street2 || undefined,
+                  city: orderData.city,
+                  province: orderData.province,
+                  postalCode: orderData.postalCode,
+                  country: orderData.country,
+                  customHeading: content.heading,
+                  customBody: content.body,
+                  customButtonText: content.buttonText,
+                }),
+                orderId: order.id,
+                userId: userId || undefined,
+              })
+            )
           )
         )
       )

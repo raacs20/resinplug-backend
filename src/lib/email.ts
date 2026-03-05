@@ -194,6 +194,65 @@ export async function sendEmail({
   }
 }
 
+/* ── Content overrides ── */
+
+// Default content for each email type (used as placeholder values in the editor)
+export const EMAIL_DEFAULTS: Record<string, Record<string, string>> = {
+  order_placed: {
+    heading: "Order Confirmed! 🎉",
+    body: "Hi {firstName}, thank you for your order! We've received your order and are getting it ready.",
+    buttonText: "Track Your Order",
+  },
+  order_shipped: {
+    heading: "Your Order Has Shipped! 📦",
+    body: "Hi {firstName}, great news! Your order {orderNumber} has been shipped and is on its way to you.",
+    body2: "You'll receive another email with tracking information once it's available.",
+    buttonText: "Track Your Order",
+  },
+  order_delivered: {
+    heading: "Your Order Has Been Delivered! ✅",
+    body: "Hi {firstName}, your order {orderNumber} has been delivered. We hope you love your new products!",
+    body2: "If you have a moment, we'd love to hear what you think. Leave a review and earn 100 reward points!",
+    buttonText: "Leave a Review",
+  },
+  order_cancelled: {
+    heading: "Order Cancelled",
+    body: "Hi {firstName}, your order {orderNumber} has been cancelled. If you used any credits, they have been refunded to your account.",
+    body2: "If you didn't request this cancellation or have any questions, please reach out to our support team.",
+    buttonText: "Contact Support",
+  },
+  tracking_update: {
+    heading: "Your Tracking Info Is Here! 🚚",
+    body: "Hi {firstName}, your order {orderNumber} now has tracking information available.",
+    buttonText: "Track Your Package",
+  },
+  welcome: {
+    heading: "Welcome to ResinPlug! 🎉",
+    body: "Hi {firstName}, thanks for creating an account with us! You're now part of the ResinPlug community.",
+    buttonText: "Start Shopping",
+  },
+};
+
+// Fetch saved content overrides from SiteSetting
+export async function getEmailContent(type: string): Promise<Record<string, string>> {
+  const settings = await prisma.siteSetting.findMany({
+    where: { key: { startsWith: `email_${type}_content_` } },
+  });
+  const content: Record<string, string> = {};
+  for (const s of settings) {
+    const field = s.key.replace(`email_${type}_content_`, "");
+    content[field] = s.value;
+  }
+  return content;
+}
+
+// Get content with defaults as fallback
+export async function getEmailContentWithDefaults(type: string): Promise<Record<string, string>> {
+  const saved = await getEmailContent(type);
+  const defaults = EMAIL_DEFAULTS[type] || {};
+  return { ...defaults, ...saved };
+}
+
 /* ── Convenience senders ── */
 
 // Resolves recipient addresses based on settings

@@ -5,6 +5,10 @@ import EmailLayout from "./EmailLayout";
 interface OrderCancelledProps {
   orderNumber: string;
   firstName: string;
+  customHeading?: string;
+  customBody?: string;
+  customBody2?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -12,19 +16,25 @@ const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
 export default function OrderCancelled({
   orderNumber = "RP-20260305-ABC",
   firstName = "Customer",
+  customHeading,
+  customBody,
+  customBody2,
+  customButtonText,
 }: OrderCancelledProps) {
+  const headingText = customHeading || "Order Cancelled";
+  const bodyText = (customBody || "Hi {firstName}, your order {orderNumber} has been cancelled. If you used any credits, they have been refunded to your account.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const body2Text = (customBody2 || "If you didn't request this cancellation or have any questions, please reach out to our support team.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber);
+  const btnText = customButtonText || "Contact Support";
+
   return (
     <EmailLayout previewText={`Order ${orderNumber} has been cancelled`}>
-      <Text style={heading}>Order Cancelled</Text>
-      <Text style={paragraph}>
-        Hi {firstName}, your order <strong>{orderNumber}</strong> has been
-        cancelled. If you used any credits, they have been refunded to your
-        account.
-      </Text>
-      <Text style={paragraph}>
-        If you didn&apos;t request this cancellation or have any questions, please
-        reach out to our support team.
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
+      <Text style={paragraph}>{body2Text}</Text>
 
       <Section style={orderBox}>
         <Text style={orderLabel}>Order Number</Text>
@@ -33,14 +43,14 @@ export default function OrderCancelled({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/support`} style={ctaButton}>
-          Contact Support
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
   );
 }
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

@@ -7,6 +7,9 @@ interface TrackingUpdateProps {
   firstName: string;
   trackingNumber: string;
   carrierName?: string;
+  customHeading?: string;
+  customBody?: string;
+  customButtonText?: string;
 }
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "https://resinplug.com";
@@ -16,16 +19,23 @@ export default function TrackingUpdate({
   firstName = "Customer",
   trackingNumber = "1Z999AA10123456784",
   carrierName = "Canada Post",
+  customHeading,
+  customBody,
+  customButtonText,
 }: TrackingUpdateProps) {
+  const headingText = customHeading || "Your Tracking Info Is Here! 🚚";
+  const bodyText = (customBody || "Hi {firstName}, your order {orderNumber} now has tracking information available.")
+    .replace(/\{firstName\}/g, firstName)
+    .replace(/\{orderNumber\}/g, orderNumber)
+    .replace(/\{trackingNumber\}/g, trackingNumber);
+  const btnText = customButtonText || "Track Your Package";
+
   return (
     <EmailLayout
       previewText={`Tracking info for order ${orderNumber}`}
     >
-      <Text style={heading}>Your Tracking Info Is Here! 🚚</Text>
-      <Text style={paragraph}>
-        Hi {firstName}, your order <strong>{orderNumber}</strong> now has
-        tracking information available.
-      </Text>
+      <Text style={headingStyle}>{headingText}</Text>
+      <Text style={paragraph}>{bodyText}</Text>
 
       <Section style={trackingBox}>
         <Text style={trackingLabel}>Tracking Number</Text>
@@ -37,14 +47,14 @@ export default function TrackingUpdate({
 
       <Section style={ctaSection}>
         <Link href={`${FRONTEND_URL}/tracking`} style={ctaButton}>
-          Track Your Package
+          {btnText}
         </Link>
       </Section>
     </EmailLayout>
   );
 }
 
-const heading: React.CSSProperties = {
+const headingStyle: React.CSSProperties = {
   color: "#ffffff",
   fontSize: "24px",
   fontWeight: 700,

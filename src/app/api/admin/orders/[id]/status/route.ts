@@ -4,7 +4,7 @@ import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { logActivity } from "@/lib/activity-log";
-import { sendEmail, resolveRecipients } from "@/lib/email";
+import { sendEmail, resolveRecipients, getEmailContentWithDefaults } from "@/lib/email";
 import { createElement } from "react";
 import OrderShipped from "@/emails/OrderShipped";
 import OrderDelivered from "@/emails/OrderDelivered";
@@ -79,7 +79,8 @@ export async function PATCH(
     );
 
     // Fire-and-forget status change email
-    const statusEmailMap: Record<string, { type: string; subject: string; template: React.ComponentType<{ orderNumber: string; firstName: string }> }> = {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statusEmailMap: Record<string, { type: string; subject: string; template: React.ComponentType<any> }> = {
       shipped: { type: "order_shipped", subject: `Your Order #${order.orderNumber} Has Shipped`, template: OrderShipped },
       delivered: { type: "order_delivered", subject: `Your Order #${order.orderNumber} Has Been Delivered`, template: OrderDelivered },
       cancelled: { type: "order_cancelled", subject: `Order #${order.orderNumber} Cancelled`, template: OrderCancelled },
@@ -87,21 +88,27 @@ export async function PATCH(
 
     const emailConfig = statusEmailMap[status];
     if (emailConfig) {
-      resolveRecipients(emailConfig.type, order.email)
-        .then((recipients) =>
-          Promise.all(
-            recipients.map((to) =>
-              sendEmail({
-                type: emailConfig.type,
-                to,
-                subject: emailConfig.subject,
-                react: createElement(emailConfig.template, {
-                  orderNumber: order.orderNumber,
-                  firstName: order.firstName,
-                }),
-                orderId: order.id,
-                userId: order.userId || undefined,
-              })
+      getEmailContentWithDefaults(emailConfig.type)
+        .then((content) =>
+          resolveRecipients(emailConfig.type, order.email).then((recipients) =>
+            Promise.all(
+              recipients.map((to) =>
+                sendEmail({
+                  type: emailConfig.type,
+                  to,
+                  subject: emailConfig.subject,
+                  react: createElement(emailConfig.template, {
+                    orderNumber: order.orderNumber,
+                    firstName: order.firstName,
+                    customHeading: content.heading,
+                    customBody: content.body,
+                    customBody2: content.body2,
+                    customButtonText: content.buttonText,
+                  }),
+                  orderId: order.id,
+                  userId: order.userId || undefined,
+                })
+              )
             )
           )
         )
