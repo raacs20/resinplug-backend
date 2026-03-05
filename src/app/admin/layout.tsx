@@ -57,6 +57,7 @@ import {
   Image,
   Activity,
   LineChart,
+  Mail,
 } from "lucide-react";
 import { NotificationBell } from "./components/NotificationBell";
 
@@ -81,6 +82,7 @@ const NAV_SYSTEM = [
   { href: "/admin/activity", label: "Activity Log", icon: Activity },
   { href: "/admin/analytics", label: "Analytics", icon: LineChart },
   { href: "/admin/reports", label: "Reports", icon: BarChart3 },
+  { href: "/admin/email", label: "Email", icon: Mail },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 

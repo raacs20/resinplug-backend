@@ -4,6 +4,11 @@ import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { logActivity } from "@/lib/activity-log";
+import { sendEmail, resolveRecipients } from "@/lib/email";
+import { createElement } from "react";
+import OrderShipped from "@/emails/OrderShipped";
+import OrderDelivered from "@/emails/OrderDelivered";
+import OrderCancelled from "@/emails/OrderCancelled";
 import { z } from "zod";
 
 const VALID_STATUSES = ["processing", "shipped", "in_transit", "delivered", "cancelled"] as const;
@@ -72,6 +77,36 @@ export async function PATCH(
       id,
       `Status changed from ${previousStatus} to ${status}`
     );
+
+    // Fire-and-forget status change email
+    const statusEmailMap: Record<string, { type: string; subject: string; template: React.ComponentType<{ orderNumber: string; firstName: string }> }> = {
+      shipped: { type: "order_shipped", subject: `Your Order #${order.orderNumber} Has Shipped`, template: OrderShipped },
+      delivered: { type: "order_delivered", subject: `Your Order #${order.orderNumber} Has Been Delivered`, template: OrderDelivered },
+      cancelled: { type: "order_cancelled", subject: `Order #${order.orderNumber} Cancelled`, template: OrderCancelled },
+    };
+
+    const emailConfig = statusEmailMap[status];
+    if (emailConfig) {
+      resolveRecipients(emailConfig.type, order.email)
+        .then((recipients) =>
+          Promise.all(
+            recipients.map((to) =>
+              sendEmail({
+                type: emailConfig.type,
+                to,
+                subject: emailConfig.subject,
+                react: createElement(emailConfig.template, {
+                  orderNumber: order.orderNumber,
+                  firstName: order.firstName,
+                }),
+                orderId: order.id,
+                userId: order.userId || undefined,
+              })
+            )
+          )
+        )
+        .catch((e) => console.error("Status email error:", e));
+    }
 
     return success(serializeDecimals(order));
   } catch (err) {

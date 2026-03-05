@@ -4,6 +4,9 @@ import { requireAdmin } from "@/lib/admin";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { logActivity } from "@/lib/activity-log";
+import { sendEmail, resolveRecipients } from "@/lib/email";
+import { createElement } from "react";
+import TrackingUpdate from "@/emails/TrackingUpdate";
 import { z } from "zod";
 
 const trackingSchema = z.object({
@@ -70,6 +73,29 @@ export async function PUT(
       id,
       `Tracking updated: ${trackingNumber}${carrierName ? ` (${carrierName})` : ""}`
     );
+
+    // Fire-and-forget tracking email
+    resolveRecipients("tracking_update", order.email)
+      .then((recipients) =>
+        Promise.all(
+          recipients.map((to) =>
+            sendEmail({
+              type: "tracking_update",
+              to,
+              subject: `Tracking Info for Order #${order.orderNumber}`,
+              react: createElement(TrackingUpdate, {
+                orderNumber: order.orderNumber,
+                firstName: order.firstName,
+                trackingNumber,
+                carrierName: carrierName || undefined,
+              }),
+              orderId: order.id,
+              userId: order.userId || undefined,
+            })
+          )
+        )
+      )
+      .catch((e) => console.error("Tracking email error:", e));
 
     return success(serializeDecimals(order));
   } catch (err) {

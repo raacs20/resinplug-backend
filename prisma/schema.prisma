@@ -470,6 +470,23 @@ model AnalyticsEvent {
   @@index([createdAt])
 }
 
+// -- Email Log --
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  type      String   // "order_placed", "order_shipped", etc.
+  to        String   // recipient email
+  subject   String
+  status    String   // "sent", "failed"
+  error     String?  @db.Text
+  orderId   String?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@index([to])
+}
+
 // -- Stock Movements --
 
 model StockMovement {

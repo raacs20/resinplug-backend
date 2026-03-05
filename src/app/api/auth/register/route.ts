@@ -3,6 +3,9 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { createNotification } from "@/lib/notifications";
+import { sendEmail, resolveRecipients } from "@/lib/email";
+import { createElement } from "react";
+import WelcomeEmail from "@/emails/WelcomeEmail";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 
@@ -37,6 +40,26 @@ export async function POST(request: NextRequest) {
       `${user.name || user.email} just registered`,
       `/admin/customers`
     ).catch((e) => console.error("Notification error:", e));
+
+    // Fire-and-forget welcome email
+    resolveRecipients("welcome", user.email)
+      .then((recipients) =>
+        Promise.all(
+          recipients.map((to) =>
+            sendEmail({
+              type: "welcome",
+              to,
+              subject: "Welcome to ResinPlug!",
+              react: createElement(WelcomeEmail, {
+                name: user.name || undefined,
+                email: user.email,
+              }),
+              userId: user.id,
+            })
+          )
+        )
+      )
+      .catch((e) => console.error("Welcome email error:", e));
 
     return success(
       { id: user.id, name: user.name, email: user.email },
