@@ -628,7 +628,7 @@ export default function NewProduct() {
                     )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="thc">THC %</Label>
+                    <Label htmlFor="thc">THCa %</Label>
                     <Input
                       id="thc"
                       value={form.thc}

@@ -964,7 +964,7 @@ export default function EditProduct() {
                     {errors.category && <p className="text-sm text-red-500 mt-1">{errors.category}</p>}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="thc">THC % *</Label>
+                    <Label htmlFor="thc">THCa %</Label>
                     <Input
                       id="thc"
                       value={form.thc}

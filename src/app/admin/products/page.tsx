@@ -297,7 +297,7 @@ export default function AdminProducts() {
               </th>
               <th className="text-left p-3 cursor-pointer select-none hover:text-white transition-colors" onClick={() => toggleSort("name")}>Product{sortIndicator("name")}</th>
               <th className="text-left p-3 cursor-pointer select-none hover:text-white transition-colors" onClick={() => toggleSort("category")}>Category{sortIndicator("category")}</th>
-              <th className="text-left p-3">THC</th>
+              <th className="text-left p-3">THCa</th>
               <th className="text-right p-3 cursor-pointer select-none hover:text-white transition-colors" onClick={() => toggleSort("salePrice")}>Price{sortIndicator("salePrice")}</th>
               <th className="text-center p-3 cursor-pointer select-none hover:text-white transition-colors" onClick={() => toggleSort("isActive")}>Active{sortIndicator("isActive")}</th>
               <th className="text-center p-3">Featured</th>
