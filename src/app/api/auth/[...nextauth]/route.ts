@@ -28,21 +28,29 @@ setInterval(() => {
 export const { GET } = handlers;
 
 export async function POST(request: NextRequest) {
-  // Only rate limit credential sign-in (not signout, session refresh, etc.)
-  const pathname = request.nextUrl.pathname;
+  try {
+    // Only rate limit credential sign-in (not signout, session refresh, etc.)
+    const pathname = request.nextUrl.pathname;
 
-  if (pathname.endsWith("/callback/credentials")) {
-    const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      request.headers.get("x-real-ip") ||
-      "unknown";
-    if (isLoginRateLimited(ip)) {
-      return NextResponse.json(
-        { error: "Too many login attempts. Try again later." },
-        { status: 429 }
-      );
+    if (pathname.endsWith("/callback/credentials")) {
+      const ip =
+        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        request.headers.get("x-real-ip") ||
+        "unknown";
+      if (isLoginRateLimited(ip)) {
+        return NextResponse.json(
+          { error: "Too many login attempts. Try again later." },
+          { status: 429 }
+        );
+      }
     }
-  }
 
-  return handlers.POST(request);
+    return handlers.POST(request);
+  } catch (err) {
+    console.error("Auth POST error:", err);
+    return NextResponse.json(
+      { error: "Authentication error" },
+      { status: 500 }
+    );
+  }
 }

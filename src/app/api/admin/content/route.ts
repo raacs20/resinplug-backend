@@ -67,7 +67,7 @@ export async function PUT(request: NextRequest) {
     );
 
     await logActivity(
-      (session!.user as any).id,
+      (session!.user as Record<string, unknown>).id as string,
       "content.update",
       "content",
       undefined,

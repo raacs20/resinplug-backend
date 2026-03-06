@@ -71,7 +71,7 @@ export async function PUT(
       data: { relatedProductIds: filtered },
     });
 
-    const adminId = (session!.user as any).id;
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(
       adminId,
       "product.related.update",

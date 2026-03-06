@@ -97,7 +97,7 @@ export async function PATCH(
       data: { isBanned },
     });
 
-    const adminId = (session!.user as any).id;
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(adminId, isBanned ? "customer.ban" : "customer.unban", "customer", id).catch(() => {});
 
     return success({ isBanned: user.isBanned });
