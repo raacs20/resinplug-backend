@@ -1,4 +1,5 @@
 import { PrismaClient, Category } from "@prisma/client";
+import { productDescriptions } from "./product-descriptions";
 
 const prisma = new PrismaClient();
 
@@ -133,6 +134,7 @@ async function main() {
   const createdProducts: Map<string, string> = new Map(); // name -> id
 
   for (const p of products) {
+    const desc = productDescriptions[p.name];
     const product = await prisma.product.create({
       data: {
         name: p.name,
@@ -143,6 +145,11 @@ async function main() {
         category: p.category,
         thc: p.thc,
         popularity: p.popularity,
+        description: desc?.description ?? null,
+        shortDesc: desc?.shortDesc ?? null,
+        metaTitle: desc?.metaTitle ?? null,
+        metaDescription: desc?.metaDescription ?? null,
+        metaKeywords: desc?.metaKeywords ?? null,
         variants: {
           create: defaultVariants.map((v) => ({
             weight: v.weight,
