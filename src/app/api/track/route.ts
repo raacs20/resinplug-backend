@@ -1,5 +1,8 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { success, badRequest, serverError } from "@/lib/api-response";
+import { trackLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit";
+import { z } from "zod";
 
 const ALLOWED_EVENTS = [
   "page_view",
@@ -9,7 +12,21 @@ const ALLOWED_EVENTS = [
   "begin_checkout",
   "purchase",
   "search",
-];
+] as const;
+
+const trackSchema = z.object({
+  event: z.enum(ALLOWED_EVENTS, { errorMap: () => ({ message: "Invalid event type" }) }),
+  url: z.string().max(2048).optional(),
+  pageTitle: z.string().max(512).optional(),
+  productId: z.string().max(255).optional(),
+  productName: z.string().max(512).optional(),
+  category: z.string().max(255).optional(),
+  value: z.number().optional(),
+  sessionId: z.string().min(1, "sessionId is required").max(255),
+  userId: z.string().max(255).optional(),
+  referrer: z.string().max(2048).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
 
 /* ══════════════════════════════════════════════════════════════════════
    Write buffer — batches INSERTs so we do 1 DB write per flush
@@ -58,49 +75,19 @@ function enqueue(event: QueuedEvent) {
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   Simple in-memory rate limiter — 20 events per IP per 10 seconds.
-   Prevents bot spam without adding Redis dependency.
-   ══════════════════════════════════════════════════════════════════════ */
-const rateLimitMap = new Map<string, { count: number; reset: number }>();
-const RATE_WINDOW = 10_000; // 10 seconds
-const RATE_LIMIT = 20;      // max events per window
-
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
-  if (!entry || now >= entry.reset) {
-    rateLimitMap.set(ip, { count: 1, reset: now + RATE_WINDOW });
-    return false;
-  }
-  entry.count++;
-  if (entry.count > RATE_LIMIT) return true;
-  return false;
-}
-
-// Periodic cleanup of stale rate limit entries
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of rateLimitMap) {
-    if (now >= entry.reset) rateLimitMap.delete(ip);
-  }
-}, 30_000);
-
 export async function POST(req: NextRequest) {
   try {
-    // Rate limit by IP
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      "unknown";
-    if (isRateLimited(ip)) {
-      return NextResponse.json(
-        { error: { code: "RATE_LIMITED", message: "Too many requests" } },
-        { status: 429 }
-      );
+    // Rate limit by IP (Redis-backed)
+    const { limited } = await checkRateLimit(trackLimiter, getClientIp(req));
+    if (limited) {
+      return badRequest("Too many requests");
     }
 
     const body = await req.json();
+    const parsed = trackSchema.safeParse(body);
+    if (!parsed.success) {
+      return badRequest(parsed.error.issues.map((i) => i.message).join(", "));
+    }
 
     const {
       event,
@@ -114,22 +101,7 @@ export async function POST(req: NextRequest) {
       userId,
       referrer,
       metadata,
-    } = body;
-
-    // Validate required fields
-    if (!event || !sessionId) {
-      return NextResponse.json(
-        { error: "event and sessionId are required" },
-        { status: 400 }
-      );
-    }
-
-    if (!ALLOWED_EVENTS.includes(event)) {
-      return NextResponse.json(
-        { error: "Invalid event type" },
-        { status: 400 }
-      );
-    }
+    } = parsed.data;
 
     // Read userAgent from request headers
     const userAgent = req.headers.get("user-agent") || undefined;
@@ -150,13 +122,10 @@ export async function POST(req: NextRequest) {
       metadata: metadata ? JSON.stringify(metadata) : undefined,
     });
 
-    return NextResponse.json({ data: { ok: true } });
+    return success({ ok: true });
   } catch (err) {
     console.error("Track error:", err);
-    return NextResponse.json(
-      { error: "Failed to track event" },
-      { status: 500 }
-    );
+    return serverError();
   }
 }
 

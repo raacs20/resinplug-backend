@@ -6,9 +6,13 @@ import { serializeDecimals } from "@/lib/serialize";
 import { createNotification } from "@/lib/notifications";
 import { sendEmail, resolveRecipients, getEmailContentWithDefaults } from "@/lib/email";
 import { createElement } from "react";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import OrderPlaced from "@/emails/OrderPlaced";
+import AccountSetup from "@/emails/AccountSetup";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import { orderLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit";
 
 // Defaults — overridden by SiteSetting values at runtime
 const DEFAULT_FREE_SHIPPING_THRESHOLD = 200;
@@ -56,11 +60,11 @@ const createOrderSchema = z.object({
   couponCode: z.string().optional(),
 });
 
-/** Generate order number with 6 random alphanumeric chars (~2.2B combos/day) */
+/** Generate order number with 6 cryptographically-random alphanumeric chars */
 function generateOrderNumber(): string {
   const date = new Date();
   const datePart = date.toISOString().slice(0, 10).replace(/-/g, "");
-  const randPart = Math.random().toString(36).substring(2, 8).toUpperCase();
+  const randPart = crypto.randomBytes(4).toString("hex").slice(0, 6).toUpperCase();
   return `RP-${datePart}-${randPart}`;
 }
 
@@ -75,6 +79,12 @@ function parseGramsFromWeight(weight: string): number {
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit order creation (10 per IP per hour)
+    const { limited } = await checkRateLimit(orderLimiter, getClientIp(request));
+    if (limited) {
+      return badRequest("Too many orders. Please try again later.");
+    }
+
     const body = await request.json();
     const parsed = createOrderSchema.safeParse(body);
     if (!parsed.success) {
@@ -281,7 +291,7 @@ export async function POST(request: NextRequest) {
 
           // 6. Award reward points (1 point per $1 spent, logged-in users only)
           if (userId) {
-            const pointsEarned = Math.floor(total);
+            const pointsEarned = Math.round(total);
             if (pointsEarned > 0) {
               await tx.credit.create({
                 data: {
@@ -389,6 +399,104 @@ export async function POST(request: NextRequest) {
         )
       )
       .catch((e) => console.error("Order email error:", e));
+
+    // --- Soft account creation for guest orders (fire-and-forget) ---
+    if (!userId && order) {
+      (async () => {
+        try {
+          const guestEmail = orderData.email.toLowerCase();
+          const existingUser = await prisma.user.findUnique({
+            where: { email: guestEmail },
+            select: { id: true, needsPasswordSetup: true },
+          });
+
+          let softUserId: string;
+          let isNewAccount = false;
+
+          if (existingUser) {
+            // User already exists (real account or returning guest) — just link order
+            softUserId = existingUser.id;
+          } else {
+            // Create soft account with random impossible password
+            const randomPassword = crypto.randomBytes(32).toString("hex");
+            const hashedPassword = await bcrypt.hash(randomPassword, 12);
+            const newUser = await prisma.user.create({
+              data: {
+                name: `${orderData.firstName} ${orderData.lastName}`,
+                email: guestEmail,
+                hashedPassword,
+                phone: orderData.phone || undefined,
+                needsPasswordSetup: true,
+              },
+            });
+            softUserId = newUser.id;
+            isNewAccount = true;
+          }
+
+          // Link order to user
+          await prisma.order.update({
+            where: { id: order!.id },
+            data: { userId: softUserId },
+          });
+
+          // Award reward points (same logic as authenticated checkout)
+          const pointsEarned = Math.round(Number(order!.total));
+          if (pointsEarned > 0) {
+            await prisma.credit.create({
+              data: {
+                userId: softUserId,
+                amount: pointsEarned,
+                type: "earned",
+                reason: `Purchase - Order #${order!.orderNumber}`,
+                orderId: order!.id,
+              },
+            });
+            await prisma.user.update({
+              where: { id: softUserId },
+              data: { creditBalance: { increment: pointsEarned } },
+            });
+          }
+
+          // Send "set your password" email (only for newly created accounts)
+          if (isNewAccount) {
+            const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+            const setupUrl = `${frontendUrl}/set-password?email=${encodeURIComponent(guestEmail)}`;
+
+            getEmailContentWithDefaults("account_setup")
+              .then((content) =>
+                sendEmail({
+                  type: "account_setup",
+                  to: guestEmail,
+                  subject: `Your ResinPlug Account — Order #${order!.orderNumber}`,
+                  react: createElement(AccountSetup, {
+                    firstName: orderData.firstName,
+                    orderNumber: order!.orderNumber,
+                    pointsEarned,
+                    setupUrl,
+                    customHeading: content.heading,
+                    customBody: content.body,
+                    customButtonText: content.buttonText,
+                  }),
+                  orderId: order!.id,
+                  userId: softUserId,
+                })
+              )
+              .catch((e) => console.error("Account setup email error:", e));
+
+            // Admin notification for new customer
+            createNotification(
+              "new_customer",
+              "New Customer (Guest)",
+              `${orderData.firstName} ${orderData.lastName} (${guestEmail}) — auto-created from guest checkout`,
+              `/admin/customers`
+            ).catch((e) => console.error("Notification error:", e));
+          }
+        } catch (e) {
+          // Non-fatal — the order was already created successfully
+          console.error("Soft account creation error:", e);
+        }
+      })();
+    }
 
     return success(serializeDecimals(order), { status: 201 });
   } catch (err) {

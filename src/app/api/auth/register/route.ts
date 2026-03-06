@@ -8,30 +8,7 @@ import { createElement } from "react";
 import WelcomeEmail from "@/emails/WelcomeEmail";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
-
-/* ── Rate limiting: 3 registrations per IP per hour ── */
-const registerRateLimitMap = new Map<string, { count: number; reset: number }>();
-const REGISTER_RATE_WINDOW = 60 * 60 * 1000; // 1 hour
-const REGISTER_RATE_LIMIT = 3;
-
-function isRegisterRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = registerRateLimitMap.get(ip);
-  if (!entry || now >= entry.reset) {
-    registerRateLimitMap.set(ip, { count: 1, reset: now + REGISTER_RATE_WINDOW });
-    return false;
-  }
-  entry.count++;
-  return entry.count > REGISTER_RATE_LIMIT;
-}
-
-// Cleanup stale entries every 10 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of registerRateLimitMap) {
-    if (now >= entry.reset) registerRateLimitMap.delete(ip);
-  }
-}, 10 * 60 * 1000);
+import { registerLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit";
 
 const registerSchema = z.object({
   name: z.string().min(1).max(100).optional(),
@@ -43,11 +20,8 @@ const registerSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     // Rate limit by IP
-    const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      request.headers.get("x-real-ip") ||
-      "unknown";
-    if (isRegisterRateLimited(ip)) {
+    const { limited } = await checkRateLimit(registerLimiter, getClientIp(request));
+    if (limited) {
       return badRequest("Too many registration attempts. Try again later.");
     }
 
@@ -60,11 +34,83 @@ export async function POST(request: NextRequest) {
     }
 
     const { name, email, password, phone } = parsed.data;
-    const hashedPassword = await bcrypt.hash(password, 12);
 
-    const user = await prisma.user.create({
-      data: { name, email, hashedPassword, phone },
-    });
+    let hashedPassword: string;
+    let user: { id: string; name: string | null; email: string };
+    try {
+      hashedPassword = await bcrypt.hash(password, 12);
+      user = await prisma.user.create({
+        data: { name, email, hashedPassword, phone },
+        select: { id: true, name: true, email: true },
+      });
+    } catch (createErr) {
+      // Handle P2002 (unique email constraint) — check for soft account
+      if (
+        createErr instanceof Prisma.PrismaClientKnownRequestError &&
+        createErr.code === "P2002"
+      ) {
+        const existingUser = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true, needsPasswordSetup: true },
+        });
+
+        if (existingUser?.needsPasswordSetup) {
+          // Upgrade soft account to real account
+          const hashedPw = await bcrypt.hash(password, 12);
+          const upgraded = await prisma.user.update({
+            where: { id: existingUser.id },
+            data: {
+              name: name || undefined,
+              hashedPassword: hashedPw,
+              phone: phone || undefined,
+              needsPasswordSetup: false,
+            },
+            select: { id: true, name: true, email: true },
+          });
+
+          // Fire-and-forget admin notification
+          createNotification(
+            "new_customer",
+            "New Customer",
+            `${upgraded.name || upgraded.email} activated their account`,
+            `/admin/customers`
+          ).catch((e) => console.error("Notification error:", e));
+
+          // Fire-and-forget welcome email
+          getEmailContentWithDefaults("welcome")
+            .then((content) =>
+              resolveRecipients("welcome", upgraded.email).then((recipients) =>
+                Promise.all(
+                  recipients.map((to) =>
+                    sendEmail({
+                      type: "welcome",
+                      to,
+                      subject: "Welcome to ResinPlug!",
+                      react: createElement(WelcomeEmail, {
+                        name: upgraded.name || undefined,
+                        email: upgraded.email,
+                        customHeading: content.heading,
+                        customBody: content.body,
+                        customButtonText: content.buttonText,
+                      }),
+                      userId: upgraded.id,
+                    })
+                  )
+                )
+              )
+            )
+            .catch((e) => console.error("Welcome email error:", e));
+
+          return success(
+            { id: upgraded.id, name: upgraded.name, email: upgraded.email },
+            { status: 201 }
+          );
+        }
+
+        return badRequest("An account with this email already exists");
+      }
+      throw createErr;
+    }
 
     // Fire-and-forget notification for admin
     createNotification(
@@ -104,12 +150,6 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
-      return badRequest("An account with this email already exists");
-    }
     console.error("POST /api/auth/register error:", err);
     return serverError();
   }

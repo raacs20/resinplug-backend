@@ -2,53 +2,35 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { encode } from "next-auth/jwt";
+import { adminLoginLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit";
+import { z } from "zod";
 
-/* ── Rate limiting: 5 attempts per IP per 15 minutes ── */
-const loginRateLimitMap = new Map<string, { count: number; reset: number }>();
-const LOGIN_RATE_WINDOW = 15 * 60 * 1000; // 15 minutes
-const LOGIN_RATE_LIMIT = 5;
-
-function isLoginRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = loginRateLimitMap.get(ip);
-  if (!entry || now >= entry.reset) {
-    loginRateLimitMap.set(ip, { count: 1, reset: now + LOGIN_RATE_WINDOW });
-    return false;
-  }
-  entry.count++;
-  return entry.count > LOGIN_RATE_LIMIT;
-}
-
-// Cleanup stale entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, entry] of loginRateLimitMap) {
-    if (now >= entry.reset) loginRateLimitMap.delete(ip);
-  }
-}, 5 * 60 * 1000);
+const adminLoginSchema = z.object({
+  email: z.string().email("Valid email is required").max(255),
+  password: z.string().min(1, "Password is required").max(255),
+});
 
 export async function POST(request: NextRequest) {
   try {
     // Rate limit by IP
-    const ip =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      request.headers.get("x-real-ip") ||
-      "unknown";
-    if (isLoginRateLimited(ip)) {
+    const { limited } = await checkRateLimit(adminLoginLimiter, getClientIp(request));
+    if (limited) {
       return NextResponse.json(
         { error: { message: "Too many login attempts. Try again later." } },
         { status: 429 }
       );
     }
 
-    const { email, password } = await request.json();
-
-    if (!email || !password) {
+    const body = await request.json();
+    const parsed = adminLoginSchema.safeParse(body);
+    if (!parsed.success) {
       return NextResponse.json(
-        { error: { message: "Email and password are required" } },
+        { error: { message: parsed.error.issues.map((i) => i.message).join(", ") } },
         { status: 400 }
       );
     }
+
+    const { email, password } = parsed.data;
 
     // Find user
     const user = await prisma.user.findUnique({ where: { email } });

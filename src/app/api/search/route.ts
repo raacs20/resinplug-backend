@@ -3,6 +3,29 @@ import { prisma } from "@/lib/prisma";
 import { success, badRequest, serverError } from "@/lib/api-response";
 import { formatProduct } from "@/lib/serialize";
 
+/* ── Simple in-memory cache for search results ── */
+const searchCache = new Map<string, { data: unknown; expiresAt: number }>();
+const SEARCH_CACHE_TTL_MS = 60_000; // 60 seconds
+
+function getSearchCached(key: string): unknown | null {
+  const entry = searchCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    searchCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setSearchCache(key: string, data: unknown): void {
+  searchCache.set(key, { data, expiresAt: Date.now() + SEARCH_CACHE_TTL_MS });
+  // Limit cache size
+  if (searchCache.size > 200) {
+    const firstKey = searchCache.keys().next().value;
+    if (firstKey) searchCache.delete(firstKey);
+  }
+}
+
 /**
  * Server-side product search with multi-signal scoring.
  * Mirrors the client-side algorithm from the frontend's src/lib/search.ts.
@@ -83,6 +106,13 @@ export async function GET(request: NextRequest) {
       return badRequest("Query parameter 'q' is required");
     }
 
+    // Check cache
+    const cacheKey = `search:${q.toLowerCase()}:${limit}`;
+    const cached = getSearchCached(cacheKey);
+    if (cached) {
+      return success(cached);
+    }
+
     // Fetch all active products (34 products is small enough to score in-memory)
     const products = await prisma.product.findMany({
       where: { isActive: true },
@@ -98,12 +128,15 @@ export async function GET(request: NextRequest) {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
 
-    return success(
-      scored.map((s) => ({
-        ...formatProduct(s.product as unknown as Record<string, unknown>),
-        _score: s.score,
-      }))
-    );
+    const results = scored.map((s) => ({
+      ...formatProduct(s.product as unknown as Record<string, unknown>),
+      _score: s.score,
+    }));
+
+    // Cache results
+    setSearchCache(cacheKey, results);
+
+    return success(results);
   } catch (err) {
     console.error("GET /api/search error:", err);
     return serverError();

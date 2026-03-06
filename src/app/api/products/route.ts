@@ -6,6 +6,29 @@ import { formatProduct } from "@/lib/serialize";
 import { z } from "zod";
 import { Category, Prisma } from "@prisma/client";
 
+/* ── Simple in-memory cache for product listings ── */
+const productListCache = new Map<string, { data: unknown; meta: unknown; expiresAt: number }>();
+const PRODUCT_CACHE_TTL_MS = 60_000; // 60 seconds
+
+function getProductCached(key: string): { data: unknown; meta: unknown } | null {
+  const entry = productListCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    productListCache.delete(key);
+    return null;
+  }
+  return { data: entry.data, meta: entry.meta };
+}
+
+function setProductCache(key: string, data: unknown, meta: unknown): void {
+  productListCache.set(key, { data, meta, expiresAt: Date.now() + PRODUCT_CACHE_TTL_MS });
+  // Limit cache size to prevent memory leaks
+  if (productListCache.size > 100) {
+    const firstKey = productListCache.keys().next().value;
+    if (firstKey) productListCache.delete(firstKey);
+  }
+}
+
 const querySchema = z.object({
   category: z.nativeEnum(Category).optional(),
   sort: z.enum(["price_asc", "price_desc", "popularity", "name", "newest"]).optional(),
@@ -47,6 +70,13 @@ export async function GET(request: NextRequest) {
 
     const { category, sort, page, limit, active } = parsed.data;
 
+    // Check cache
+    const cacheKey = `products:${category || "all"}:${sort || "default"}:${page}:${limit}:${active}`;
+    const cached = getProductCached(cacheKey);
+    if (cached) {
+      return success(cached.data, { meta: cached.meta as Record<string, unknown> });
+    }
+
     const where: Prisma.ProductWhereInput = {};
     if (active === "true") where.isActive = true;
     if (category) where.category = category;
@@ -81,9 +111,13 @@ export async function GET(request: NextRequest) {
       prisma.product.count({ where }),
     ]);
 
-    return success(products.map(formatProduct), {
-      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
-    });
+    const formattedProducts = products.map(formatProduct);
+    const meta = { page, limit, total, totalPages: Math.ceil(total / limit) };
+
+    // Cache the result
+    setProductCache(cacheKey, formattedProducts, meta);
+
+    return success(formattedProducts, { meta });
   } catch (err) {
     console.error("GET /api/products error:", err);
     return serverError();

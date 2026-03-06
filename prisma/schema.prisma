@@ -28,7 +28,7 @@ model Product {
   // New fields
   description     String?             @db.Text
   shortDesc       String?
-  sku             String?
+  sku             String?             @unique
   totalStockGrams Decimal?            @db.Decimal(10, 2)
   stockUnit       String              @default("grams")
   metaTitle       String?
@@ -43,6 +43,7 @@ model Product {
   collections     ProductCollection[]
   wishlists       Wishlist[]
   reviews         Review[]
+  orderItems      OrderItem[]
   stockMovements  StockMovement[]
   reorderPoint    Int?            @default(0)
   relatedProductIds String[]        @default([])
@@ -50,6 +51,7 @@ model Product {
   @@index([category])
   @@index([popularity])
   @@index([isActive])
+  @@index([createdAt])
 }
 
 model Variant {
@@ -62,7 +64,7 @@ model Variant {
   discount      String?
   sortOrder     Int      @default(0)
   // New fields
-  sku           String?
+  sku           String?  @unique
   gramsPerUnit  Decimal? @db.Decimal(10, 2)
   stockOverride Int?
   isActive      Boolean  @default(true)
@@ -123,8 +125,9 @@ model User {
   email          String         @unique
   hashedPassword String
   phone          String?
-  isBanned       Boolean        @default(false)
-  role           UserRole       @default(user)
+  isBanned           Boolean        @default(false)
+  needsPasswordSetup Boolean        @default(false)
+  role               UserRole       @default(user)
   creditBalance  Decimal        @db.Decimal(10, 2) @default(0)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
@@ -133,7 +136,10 @@ model User {
   addresses      SavedAddress[]
   reviews        Review[]
   credits        Credit[]
-  notes          CustomerNote[]
+  notes          CustomerNote[]     @relation("CustomerNoteUser")
+  createdNotes   CustomerNote[]     @relation("CustomerNoteAdmin")
+  activityLogs   ActivityLog[]
+  orderEvents    OrderEvent[]
 }
 
 model Order {
@@ -166,6 +172,7 @@ model Order {
   items          OrderItem[]
   events         OrderEvent[]
   refunds        Refund[]
+  credits        Credit[]
   orderNotes     OrderNote[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
@@ -181,6 +188,7 @@ model OrderItem {
   orderId      String
   order        Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
   productId    String?
+  product      Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
   productName  String
   productImage String
   weight       String
@@ -189,6 +197,7 @@ model OrderItem {
   review       Review? // Reverse relation: one review per order-item
 
   @@index([orderId])
+  @@index([productId])
 }
 
 // ── Wishlist + Addresses ──
@@ -218,7 +227,7 @@ model SavedAddress {
   city      String
   state     String
   zip       String
-  country   String   @default("Canada")
+  country   String   @default("United States")
   phone     String
   createdAt DateTime @default(now())
 
@@ -245,7 +254,6 @@ model Coupon {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
-  @@index([code])
   @@index([isActive])
 }
 
@@ -255,7 +263,6 @@ model SiteSetting {
   value String
   label String @default("")
 
-  @@index([key])
 }
 
 // ── Reviews ──
@@ -280,6 +287,7 @@ model Review {
 
   @@index([productId])
   @@index([userId])
+  @@index([createdAt])
 }
 
 // ── Credits / Rewards ──
@@ -299,6 +307,7 @@ model Credit {
   type      CreditType
   reason    String?
   orderId   String?
+  order     Order?     @relation(fields: [orderId], references: [id], onDelete: SetNull)
   createdAt DateTime   @default(now())
 
   @@index([userId])
@@ -316,7 +325,6 @@ model PageSeo {
   ogImage         String?
   updatedAt       DateTime @updatedAt
 
-  @@index([pageSlug])
 }
 
 // ── Activity Log ──
@@ -324,6 +332,7 @@ model PageSeo {
 model ActivityLog {
   id        String   @id @default(cuid())
   adminId   String
+  admin     User     @relation(fields: [adminId], references: [id], onDelete: Cascade)
   action    String
   entity    String
   entityId  String?
@@ -386,12 +395,14 @@ model Notification {
 model CustomerNote {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation("CustomerNoteUser", fields: [userId], references: [id], onDelete: Cascade)
   note      String   @db.Text
   createdBy String
+  admin     User     @relation("CustomerNoteAdmin", fields: [createdBy], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
 
   @@index([userId])
+  @@index([createdBy])
 }
 
 // ── Order Events / Timeline ──
@@ -405,6 +416,7 @@ model OrderEvent {
   toValue   String?  // e.g. new status
   note      String?  @db.Text
   adminId   String?
+  admin     User?    @relation(fields: [adminId], references: [id], onDelete: SetNull)
   adminName String?
   createdAt DateTime @default(now())
 
@@ -459,7 +471,7 @@ model AnalyticsEvent {
   productId   String?
   productName String?
   category    String?
-  value       Float?
+  value       Decimal?    @db.Decimal(10, 2)
   sessionId   String
   userId      String?
   userAgent   String?
@@ -504,4 +516,18 @@ model StockMovement {
 
   @@index([productId])
   @@index([createdAt])
+}
+
+// -- Password Reset Tokens --
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  email     String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([email])
+  @@index([token])
 }

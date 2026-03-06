@@ -1,9 +1,14 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
-import { success, notFound, serverError } from "@/lib/api-response";
+import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { logActivity } from "@/lib/activity-log";
+import { z } from "zod";
+
+const banSchema = z.object({
+  isBanned: z.boolean({ required_error: "isBanned (boolean) is required" }),
+});
 
 export async function GET(
   _request: NextRequest,
@@ -91,7 +96,13 @@ export async function PATCH(
   const { id } = await params;
 
   try {
-    const { isBanned } = await req.json();
+    const body = await req.json();
+    const parsed = banSchema.safeParse(body);
+    if (!parsed.success) {
+      return badRequest(parsed.error.issues.map((i) => i.message).join(", "));
+    }
+
+    const { isBanned } = parsed.data;
     const user = await prisma.user.update({
       where: { id },
       data: { isBanned },

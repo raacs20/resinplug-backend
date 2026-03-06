@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { success, badRequest, notFound, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
+import { couponValidateLimiter, getClientIp, checkRateLimit } from "@/lib/rate-limit";
 import { z } from "zod";
 
 const couponValidateSchema = z.object({
@@ -11,6 +12,11 @@ const couponValidateSchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit: 10 requests per IP per minute
+    const { limited } = await checkRateLimit(couponValidateLimiter, getClientIp(request));
+    if (limited) {
+      return badRequest("Too many coupon attempts. Please try again later.");
+    }
     const body = await request.json();
     const parsed = couponValidateSchema.safeParse(body);
     if (!parsed.success) {
@@ -43,12 +49,12 @@ export async function POST(request: NextRequest) {
       return badRequest(`Minimum order of $${Number(coupon.minOrder).toFixed(2)} required for this coupon`);
     }
 
-    // Calculate discount
+    // Calculate discount (round immediately to avoid floating-point drift)
     let discount = 0;
     if (coupon.discountType === "percentage") {
-      discount = (subtotal * Number(coupon.discountValue)) / 100;
+      discount = Math.round((subtotal * Number(coupon.discountValue) / 100) * 100) / 100;
     } else {
-      discount = Number(coupon.discountValue);
+      discount = Math.round(Number(coupon.discountValue) * 100) / 100;
     }
 
     return success(

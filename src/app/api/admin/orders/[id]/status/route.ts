@@ -13,6 +13,15 @@ import { z } from "zod";
 
 const VALID_STATUSES = ["processing", "shipped", "in_transit", "delivered", "cancelled"] as const;
 
+/** Valid status transitions — terminal states (delivered, cancelled) cannot transition further */
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  processing: ["shipped", "cancelled"],
+  shipped: ["in_transit", "delivered", "cancelled"],
+  in_transit: ["delivered", "cancelled"],
+  delivered: [],   // terminal
+  cancelled: [],   // terminal
+};
+
 const statusSchema = z.object({
   status: z.enum(VALID_STATUSES),
 });
@@ -44,6 +53,17 @@ export async function PATCH(
     }
 
     const previousStatus = existing.status;
+
+    // Validate status transition
+    const allowed = VALID_TRANSITIONS[previousStatus] ?? [];
+    if (!allowed.includes(status)) {
+      return badRequest(
+        `Cannot transition from "${previousStatus}" to "${status}". ` +
+        (allowed.length
+          ? `Allowed transitions: ${allowed.join(", ")}`
+          : `"${previousStatus}" is a terminal status`)
+      );
+    }
 
     const order = await prisma.order.update({
       where: { id },

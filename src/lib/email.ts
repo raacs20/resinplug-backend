@@ -68,6 +68,20 @@ export const EMAIL_TYPES: EmailType[] = [
     defaultEnabled: true,
     defaultRecipient: "customer",
   },
+  {
+    type: "password_reset",
+    label: "Password Reset",
+    description: "Sent when a customer requests a password reset",
+    defaultEnabled: true,
+    defaultRecipient: "customer",
+  },
+  {
+    type: "account_setup",
+    label: "Account Setup (Guest)",
+    description: "Sent when a guest checkout creates a soft account",
+    defaultEnabled: true,
+    defaultRecipient: "customer",
+  },
 ];
 
 /* ── Settings helpers ── */
@@ -234,6 +248,11 @@ export const EMAIL_DEFAULTS: Record<string, Record<string, string>> = {
     heading: "Welcome to ResinPlug! 🎉",
     body: "Hi {firstName}, thanks for creating an account with us! You're now part of the ResinPlug community.",
     buttonText: "Start Shopping",
+  },
+  password_reset: {
+    heading: "Reset Your Password",
+    body: "Hi {firstName}, we received a request to reset your password. Click the button below to choose a new password.",
+    buttonText: "Reset Password",
   },
 };
 

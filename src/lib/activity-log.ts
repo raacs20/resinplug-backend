@@ -7,7 +7,12 @@ export async function logActivity(
   entityId?: string,
   details?: string
 ) {
-  await prisma.activityLog.create({
-    data: { adminId, action, entity, entityId, details },
-  });
+  try {
+    await prisma.activityLog.create({
+      data: { adminId, action, entity, entityId, details },
+    });
+  } catch (err) {
+    // Activity logging should never crash a request
+    console.error("Activity log error (non-fatal):", err);
+  }
 }

@@ -3,13 +3,23 @@ import type { NextRequest } from "next/server";
 
 const isProduction = process.env.NODE_ENV === "production";
 
+// Warn at startup if FRONTEND_URL is missing in production
+if (isProduction && !process.env.FRONTEND_URL) {
+  console.error(
+    "CRITICAL: FRONTEND_URL is not set in production. CORS will reject all cross-origin requests."
+  );
+}
+
 export function middleware(request: NextRequest) {
   // Only apply to API routes
   if (!request.nextUrl.pathname.startsWith("/api")) {
     return NextResponse.next();
   }
 
-  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  // In production, never fall back to localhost — require FRONTEND_URL to be set
+  const frontendUrl = isProduction
+    ? process.env.FRONTEND_URL || ""
+    : process.env.FRONTEND_URL || "http://localhost:3000";
   const adminUrl = process.env.ADMIN_URL || "";
   const allowedOrigins = [
     frontendUrl,
@@ -30,6 +40,15 @@ export function middleware(request: NextRequest) {
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https://res.cloudinary.com https://*.railway.app",
+      "font-src 'self' data:",
+      "connect-src 'self' https://*.upstash.io",
+      "frame-ancestors 'none'",
+    ].join("; "),
   };
   if (isProduction) {
     securityHeaders["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";

@@ -4,6 +4,24 @@ import { requireAdmin } from "@/lib/admin";
 import { success, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 
+/* ── Simple in-memory cache for dashboard data ── */
+const dashboardCache = new Map<string, { data: unknown; expiresAt: number }>();
+const CACHE_TTL_MS = 30_000; // 30 seconds
+
+function getCached(key: string): unknown | null {
+  const entry = dashboardCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    dashboardCache.delete(key);
+    return null;
+  }
+  return entry.data;
+}
+
+function setCache(key: string, data: unknown): void {
+  dashboardCache.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+}
+
 type RangeKey = "today" | "7d" | "30d" | "90d" | "365d";
 
 function parseRange(rangeParam: string | null): {
@@ -34,6 +52,14 @@ export async function GET(request: NextRequest) {
   try {
     const url = new URL(request.url);
     const rangeParam = url.searchParams.get("range");
+
+    // Check cache first
+    const cacheKey = `dashboard:${rangeParam || "30d"}`;
+    const cached = getCached(cacheKey);
+    if (cached) {
+      return success(cached);
+    }
+
     const { days, label: rangeLabel, comparisonLabel } = parseRange(rangeParam);
 
     // Date boundaries
@@ -284,7 +310,7 @@ export async function GET(request: NextRequest) {
       ordersInPeriod: ordersInPeriodCount,
     };
 
-    return success({
+    const responseData = {
       stats,
       recentOrders: serializeDecimals(recentOrders),
       revenueChart,
@@ -296,7 +322,12 @@ export async function GET(request: NextRequest) {
       range: rangeParam || "30d",
       rangeLabel,
       comparisonLabel,
-    });
+    };
+
+    // Cache for 30 seconds
+    setCache(cacheKey, responseData);
+
+    return success(responseData);
   } catch (err) {
     console.error("Admin dashboard error:", err);
     return serverError();

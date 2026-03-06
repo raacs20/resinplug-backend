@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { requireAdmin } from "@/lib/admin";
 import { success, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
@@ -13,65 +14,74 @@ export async function GET(request: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "20", 10)));
     const sort = searchParams.get("sort") || "recent"; // recent | orders | spent
+    const search = searchParams.get("search") || "";
+    const skip = (page - 1) * limit;
 
-    // Get total count for pagination
-    const total = await prisma.user.count();
+    // Determine ORDER BY clause based on sort param
+    const orderByClause =
+      sort === "spent"
+        ? Prisma.sql`ORDER BY "totalSpent" DESC`
+        : sort === "orders"
+          ? Prisma.sql`ORDER BY "orderCount" DESC`
+          : Prisma.sql`ORDER BY u."createdAt" DESC`;
 
-    // Get users with order aggregates
-    const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        role: true,
-        createdAt: true,
-        _count: { select: { orders: true } },
-        orders: {
-          select: { total: true },
-        },
-      },
-      skip: (page - 1) * limit,
-      take: limit,
-      orderBy:
-        sort === "orders"
-          ? { orders: { _count: "desc" } }
-          : sort === "spent"
-            ? // For spent, we sort in JS below since Prisma can't aggregate-sort
-              { createdAt: "desc" }
-            : { createdAt: "desc" },
-    });
+    const searchParam = search ? `%${search}%` : null;
 
-    // Map to include computed fields
-    let customers = users.map((user) => {
-      const totalSpent = user.orders.reduce(
-        (sum, order) => sum + Number(order.total),
-        0
-      );
-      return {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        createdAt: user.createdAt,
-        orderCount: user._count.orders,
-        totalSpent: Math.round(totalSpent * 100) / 100,
-      };
-    });
+    // Use raw SQL for all sort modes — avoids N+1 loading all orders per user
+    let customers: Array<{
+      id: string;
+      name: string | null;
+      email: string;
+      phone: string | null;
+      role: string;
+      createdAt: Date;
+      orderCount: number;
+      totalSpent: number;
+    }>;
+    let total: number;
 
-    // Sort by totalSpent in JS if requested (Prisma doesn't support aggregate ordering)
-    if (sort === "spent") {
-      customers = customers.sort((a, b) => b.totalSpent - a.totalSpent);
+    if (search) {
+      const countResult = await prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "User" u
+        WHERE u.name ILIKE ${searchParam} OR u.email ILIKE ${searchParam}
+      `;
+      total = Number(countResult[0].count);
+
+      customers = await prisma.$queryRaw`
+        SELECT u.id, u.name, u.email, u.phone, u.role, u."createdAt",
+               COUNT(o.id)::int AS "orderCount",
+               COALESCE(SUM(o.total), 0)::float AS "totalSpent"
+        FROM "User" u
+        LEFT JOIN "Order" o ON o."userId" = u.id
+        WHERE u.name ILIKE ${searchParam} OR u.email ILIKE ${searchParam}
+        GROUP BY u.id
+        ${orderByClause}
+        LIMIT ${limit} OFFSET ${skip}
+      `;
+    } else {
+      total = await prisma.user.count();
+
+      customers = await prisma.$queryRaw`
+        SELECT u.id, u.name, u.email, u.phone, u.role, u."createdAt",
+               COUNT(o.id)::int AS "orderCount",
+               COALESCE(SUM(o.total), 0)::float AS "totalSpent"
+        FROM "User" u
+        LEFT JOIN "Order" o ON o."userId" = u.id
+        GROUP BY u.id
+        ${orderByClause}
+        LIMIT ${limit} OFFSET ${skip}
+      `;
     }
 
-    return success(serializeDecimals(customers), {
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-      },
+    // Round totalSpent for consistency
+    const formatted = customers.map((c) => ({
+      ...c,
+      totalSpent: Math.round(c.totalSpent * 100) / 100,
+    }));
+
+    return success(serializeDecimals(formatted), {
+      meta: { page, limit, total, totalPages: Math.ceil(total / limit) },
     });
   } catch (err) {
     console.error("Admin customers list error:", err);
