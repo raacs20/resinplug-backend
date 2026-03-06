@@ -58,6 +58,7 @@ import {
   Activity,
   LineChart,
   Mail,
+  Sparkles,
 } from "lucide-react";
 import { NotificationBell } from "./components/NotificationBell";
 
@@ -72,9 +73,9 @@ const NAV_MAIN = [
 const NAV_MARKETING = [
   { href: "/admin/promotions", label: "Promotions", icon: Tag },
   { href: "/admin/reviews", label: "Reviews", icon: Star },
+  { href: "/admin/review-generator", label: "Review Generator", icon: Sparkles },
   { href: "/admin/content", label: "Content", icon: FileText },
   { href: "/admin/media", label: "Media", icon: Image },
-
 ];
 
 const NAV_SYSTEM = [

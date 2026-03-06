@@ -1,5 +1,6 @@
 import { PrismaClient, Category } from "@prisma/client";
 import { productDescriptions } from "./product-descriptions";
+import { generateAllReviews } from "./seed-reviews";
 
 const prisma = new PrismaClient();
 
@@ -125,6 +126,7 @@ async function main() {
   console.log("Seeding database...");
 
   // Clear existing data
+  await prisma.review.deleteMany();
   await prisma.productCollection.deleteMany();
   await prisma.variant.deleteMany();
   await prisma.collection.deleteMany();
@@ -196,6 +198,28 @@ async function main() {
 
     console.log(`  Created collection: ${col.name} (${uniqueNames.length} products)`);
   }
+
+  // ── Seed reviews ──
+  console.log("\nSeeding reviews...");
+  const reviews = generateAllReviews(createdProducts);
+  console.log(`Generated ${reviews.length} reviews.`);
+
+  // Batch insert reviews (Prisma createMany limit)
+  const BATCH_SIZE = 500;
+  let inserted = 0;
+  for (let i = 0; i < reviews.length; i += BATCH_SIZE) {
+    const batch = reviews.slice(i, i + BATCH_SIZE);
+    const result = await prisma.review.createMany({ data: batch });
+    inserted += result.count;
+  }
+  console.log(`Inserted ${inserted} reviews.`);
+
+  // Print summary
+  const reviewsByRating: Record<number, number> = { 5: 0, 4: 0, 3: 0 };
+  for (const r of reviews) reviewsByRating[r.rating]++;
+  console.log(`  5-star: ${reviewsByRating[5]} (${((reviewsByRating[5] / reviews.length) * 100).toFixed(1)}%)`);
+  console.log(`  4-star: ${reviewsByRating[4]} (${((reviewsByRating[4] / reviews.length) * 100).toFixed(1)}%)`);
+  console.log(`  3-star: ${reviewsByRating[3]} (${((reviewsByRating[3] / reviews.length) * 100).toFixed(1)}%)`);
 
   console.log("\nSeed complete!");
 }
