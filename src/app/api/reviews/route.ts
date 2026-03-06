@@ -31,8 +31,10 @@ export async function GET(request: NextRequest) {
       where.rating = rating;
     }
 
-    if (verifiedParam !== null && verifiedParam !== undefined) {
-      where.verified = verifiedParam === "true";
+    if (verifiedParam === "true") {
+      where.verified = true;
+    } else if (verifiedParam === "false") {
+      where.verified = false;
     }
 
     // Build orderBy

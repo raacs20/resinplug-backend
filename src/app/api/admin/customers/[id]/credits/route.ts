@@ -42,6 +42,16 @@ export async function POST(
       balanceChange = Math.abs(amount);
     }
 
+    // Guard against negative balance on deductions
+    if (balanceChange < 0) {
+      const currentBalance = Number(user.creditBalance) || 0;
+      if (currentBalance + balanceChange < 0) {
+        return badRequest(
+          `Insufficient credit balance. Current balance: ${currentBalance}, attempted deduction: ${Math.abs(balanceChange)}`
+        );
+      }
+    }
+
     // Use a transaction to create credit and update balance atomically
     const credit = await prisma.$transaction(async (tx) => {
       const creditRecord = await tx.credit.create({

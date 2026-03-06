@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { success, unauthorized, serverError } from "@/lib/api-response";
+import { success, badRequest, unauthorized, serverError } from "@/lib/api-response";
 import { serializeDecimals } from "@/lib/serialize";
 import { formatProduct } from "@/lib/serialize";
 
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
     if (!session?.user?.id) return unauthorized();
 
     const { productId } = await request.json();
-    if (!productId) return success(null, { status: 400 });
+    if (!productId) return badRequest("productId is required");
 
     // Upsert to avoid duplicate errors
     await prisma.wishlist.upsert({

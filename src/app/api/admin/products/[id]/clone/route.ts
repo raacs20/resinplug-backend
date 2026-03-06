@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/admin";
-import { success, serverError } from "@/lib/api-response";
+import { success, notFound, serverError } from "@/lib/api-response";
 import { logActivity } from "@/lib/activity-log";
 import { serializeDecimals } from "@/lib/serialize";
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       include: { variants: true },
     });
 
-    if (!original) return serverError("Product not found");
+    if (!original) return notFound("Product not found");
 
     // Generate unique slug
     let slug = `${original.slug}-copy`;
@@ -60,7 +60,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       },
     });
 
-    const adminId = (session!.user as any).id;
+    const adminId = (session!.user as Record<string, unknown>).id as string;
     await logActivity(adminId, "product.clone", "product", cloned.id, `Cloned from ${original.name}`).catch(() => {});
 
     return success(serializeDecimals(cloned));
