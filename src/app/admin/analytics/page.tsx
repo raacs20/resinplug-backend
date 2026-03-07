@@ -56,6 +56,10 @@ import {
   RefreshCw,
   Download,
   Link2,
+  Smartphone,
+  Monitor,
+  Tablet,
+  Megaphone,
 } from "lucide-react";
 import { exportToCSV } from "@/lib/csv-export";
 
@@ -66,6 +70,7 @@ import { exportToCSV } from "@/lib/csv-export";
 interface TrafficData {
   totalPageViews: number;
   uniqueVisitors: number;
+  uniqueIpVisitors: number;
   avgViewsPerVisitor: number;
   pageViewsByDay: Array<{ date: string; views: number }>;
   topPages: Array<{ url: string; views: number }>;
@@ -75,8 +80,11 @@ interface FunnelStage {
   stage: string;
   label: string;
   sessions: number;
+  visitors: number;
   rate: number;
   overallRate: number;
+  visitorRate: number;
+  overallVisitorRate: number;
 }
 
 interface FunnelData {
@@ -85,6 +93,7 @@ interface FunnelData {
   cartRate: number;
   checkoutRate: number;
   purchaseRate: number;
+  visitorPurchaseRate: number;
 }
 
 interface GeoData {
@@ -119,6 +128,14 @@ interface SourceRow {
   percentage: number;
 }
 
+interface CampaignRow {
+  campaign: string;
+  source: string;
+  medium: string;
+  sessions: number;
+  pageViews: number;
+}
+
 interface SourcesData {
   totalSessions: number;
   topSource: string;
@@ -127,6 +144,36 @@ interface SourcesData {
   pieData: Array<{ name: string; value: number }>;
   sourcesByDay: Array<Record<string, unknown>>;
   top5Sources: string[];
+  campaigns: CampaignRow[];
+}
+
+interface DeviceRow {
+  type: string;
+  sessions: number;
+  percentage: number;
+}
+
+interface BrowserRow {
+  name: string;
+  sessions: number;
+  percentage: number;
+}
+
+interface OSRow {
+  name: string;
+  sessions: number;
+  percentage: number;
+}
+
+interface DevicesData {
+  devices: DeviceRow[];
+  browsers: BrowserRow[];
+  operatingSystems: OSRow[];
+  totalSessions: number;
+  mobileShare: number;
+  mobileAndTabletShare: number;
+  topBrowser: string;
+  topOS: string;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -276,7 +323,7 @@ function TrafficTab({
       </div>
 
       {/* Stat Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Page Views</CardTitle>
@@ -298,9 +345,25 @@ function TrafficTab({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
+              {(data.uniqueIpVisitors > 0 ? data.uniqueIpVisitors : data.uniqueVisitors).toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {data.uniqueIpVisitors > 0 ? "By IP (deduplicated)" : "By session"}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Sessions
+            </CardTitle>
+            <MousePointerClick className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
               {data.uniqueVisitors.toLocaleString()}
             </div>
-            <p className="text-xs text-muted-foreground">Last {rangeLabel}</p>
+            <p className="text-xs text-muted-foreground">Tab-based sessions</p>
           </CardContent>
         </Card>
         <Card>
@@ -308,11 +371,11 @@ function TrafficTab({
             <CardTitle className="text-sm font-medium">
               Avg Views / Visitor
             </CardTitle>
-            <MousePointerClick className="h-4 w-4 text-muted-foreground" />
+            <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{data.avgViewsPerVisitor}</div>
-            <p className="text-xs text-muted-foreground">Pages per session</p>
+            <p className="text-xs text-muted-foreground">Pages per visitor</p>
           </CardContent>
         </Card>
       </div>
@@ -457,10 +520,24 @@ function FunnelTab({ data, range }: { data: FunnelData | null; range: string }) 
           <CardContent>
             <div className="text-2xl font-bold">{data.purchaseRate}%</div>
             <p className="text-xs text-muted-foreground">
-              Visitors who purchase
+              Sessions that purchase
             </p>
           </CardContent>
         </Card>
+        {data.visitorPurchaseRate > 0 && (
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+              <CardTitle className="text-sm font-medium">Real Conv. Rate</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{data.visitorPurchaseRate}%</div>
+              <p className="text-xs text-muted-foreground">
+                By unique IP visitors
+              </p>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Funnel Bar Chart */}
@@ -484,8 +561,9 @@ function FunnelTab({ data, range }: { data: FunnelData | null; range: string }) 
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-medium">{stage.label}</span>
                     <span className="text-muted-foreground">
-                      {stage.sessions.toLocaleString()} sessions (
-                      {stage.overallRate}%)
+                      {stage.sessions.toLocaleString()} sessions
+                      {stage.visitors > 0 && ` / ${stage.visitors.toLocaleString()} visitors`}
+                      {" "}({stage.overallRate}%)
                     </span>
                   </div>
                   <div className="h-8 w-full rounded bg-muted/30">
@@ -1285,6 +1363,335 @@ function SourcesTab({
           </Table>
         </CardContent>
       </Card>
+
+      {/* Campaigns Table */}
+      {data.campaigns && data.campaigns.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Megaphone className="h-5 w-5" />
+              UTM Campaigns
+            </CardTitle>
+            <CardDescription>
+              Traffic from UTM-tagged links
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">#</TableHead>
+                  <TableHead>Campaign</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Medium</TableHead>
+                  <TableHead className="text-right">Sessions</TableHead>
+                  <TableHead className="text-right">Page Views</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.campaigns.map((c, i) => (
+                  <TableRow key={`${c.campaign}-${c.source}-${c.medium}`}>
+                    <TableCell className="font-medium text-muted-foreground">
+                      {i + 1}
+                    </TableCell>
+                    <TableCell className="font-medium">{c.campaign}</TableCell>
+                    <TableCell>{c.source}</TableCell>
+                    <TableCell>{c.medium}</TableCell>
+                    <TableCell className="text-right">
+                      {c.sessions.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {c.pageViews.toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Devices Tab
+   ══════════════════════════════════════════════════════════════════════ */
+
+const DEVICE_COLORS: Record<string, string> = {
+  desktop: "#3B82F6",
+  mobile: "#EC691B",
+  tablet: "#22C55E",
+  unknown: "#6B7280",
+};
+
+const DEVICE_ICONS: Record<string, typeof Monitor> = {
+  desktop: Monitor,
+  mobile: Smartphone,
+  tablet: Tablet,
+};
+
+const deviceChartConfig: ChartConfig = {
+  sessions: { label: "Sessions", color: "#EC691B" },
+};
+
+function DevicesTab({
+  data,
+  range,
+}: {
+  data: DevicesData | null;
+  range: string;
+}) {
+  if (!data) return <AnalyticsLoading />;
+
+  const rangeLabel = RANGES.find((r) => r.value === range)?.label || "30 Days";
+
+  const devicePieData = data.devices.map((d) => ({
+    name: d.type.charAt(0).toUpperCase() + d.type.slice(1),
+    value: d.sessions,
+    color: DEVICE_COLORS[d.type] || "#6B7280",
+  }));
+
+  return (
+    <div className="space-y-6">
+      {/* Stat Cards */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">
+              Total Sessions
+            </CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {data.totalSessions.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              With device data — Last {rangeLabel}
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Mobile Share</CardTitle>
+            <Smartphone className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{data.mobileAndTabletShare}%</div>
+            <p className="text-xs text-muted-foreground">
+              Mobile + Tablet traffic
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Top Browser</CardTitle>
+            <Globe className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{data.topBrowser}</div>
+            <p className="text-xs text-muted-foreground">Most used browser</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Top OS</CardTitle>
+            <Monitor className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{data.topOS}</div>
+            <p className="text-xs text-muted-foreground">Most used OS</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Device Pie + Device Cards */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Device Distribution</CardTitle>
+            <CardDescription>Sessions by device type</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {devicePieData.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">
+                No device data yet — data will appear after new visits
+              </p>
+            ) : (
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={devicePieData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={110}
+                      paddingAngle={3}
+                      dataKey="value"
+                      nameKey="name"
+                    >
+                      {devicePieData.map((entry, index) => (
+                        <Cell key={index} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--card))",
+                        border: "1px solid hsl(var(--border))",
+                        borderRadius: "8px",
+                        color: "hsl(var(--foreground))",
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Device type breakdown cards */}
+        <div className="space-y-4">
+          {data.devices.map((d) => {
+            const DevIcon = DEVICE_ICONS[d.type] || Monitor;
+            return (
+              <Card key={d.type}>
+                <CardContent className="flex items-center gap-4 py-4">
+                  <div
+                    className="flex h-10 w-10 items-center justify-center rounded-lg"
+                    style={{ backgroundColor: (DEVICE_COLORS[d.type] || "#6B7280") + "20" }}
+                  >
+                    <DevIcon
+                      className="h-5 w-5"
+                      style={{ color: DEVICE_COLORS[d.type] || "#6B7280" }}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium capitalize">{d.type}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {d.sessions.toLocaleString()} sessions
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-bold">{d.percentage}%</p>
+                  </div>
+                  <div className="w-24 h-2 bg-muted/30 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${d.percentage}%`,
+                        backgroundColor: DEVICE_COLORS[d.type] || "#6B7280",
+                      }}
+                    />
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+          {data.devices.length === 0 && (
+            <Card>
+              <CardContent className="py-8">
+                <p className="text-center text-muted-foreground">
+                  No device data yet — data will appear after new visits
+                </p>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </div>
+
+      {/* Browser + OS Bar Charts */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Browsers</CardTitle>
+            <CardDescription>Top browsers by sessions</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.browsers.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">
+                No browser data yet
+              </p>
+            ) : (
+              <ChartContainer
+                config={deviceChartConfig}
+                className="h-[300px] w-full"
+              >
+                <BarChart
+                  data={data.browsers}
+                  layout="vertical"
+                  margin={{ top: 5, right: 10, left: 60, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    className="stroke-muted"
+                  />
+                  <XAxis
+                    type="number"
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                    width={55}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Bar dataKey="sessions" fill="#3B82F6" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ChartContainer>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Operating Systems</CardTitle>
+            <CardDescription>Top OS by sessions</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {data.operatingSystems.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">
+                No OS data yet
+              </p>
+            ) : (
+              <ChartContainer
+                config={deviceChartConfig}
+                className="h-[300px] w-full"
+              >
+                <BarChart
+                  data={data.operatingSystems}
+                  layout="vertical"
+                  margin={{ top: 5, right: 10, left: 60, bottom: 0 }}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    className="stroke-muted"
+                  />
+                  <XAxis
+                    type="number"
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                  />
+                  <YAxis
+                    type="category"
+                    dataKey="name"
+                    className="text-xs"
+                    tick={{ fill: "hsl(var(--muted-foreground))" }}
+                    width={55}
+                  />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Bar dataKey="sessions" fill="#22C55E" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ChartContainer>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -1301,6 +1708,7 @@ export default function AnalyticsPage() {
     null
   );
   const [sourcesData, setSourcesData] = useState<SourcesData | null>(null);
+  const [devicesData, setDevicesData] = useState<DevicesData | null>(null);
 
   const fetchData = useCallback(async (tab: string, dateRange: string) => {
     setLoading(true);
@@ -1317,6 +1725,7 @@ export default function AnalyticsPage() {
       else if (tab === "geo") setGeoData(d);
       else if (tab === "customers") setCustomersData(d);
       else if (tab === "sources") setSourcesData(d);
+      else if (tab === "devices") setDevicesData(d);
     } catch (err) {
       console.error("Failed to fetch analytics:", err);
     } finally {
@@ -1336,6 +1745,7 @@ export default function AnalyticsPage() {
     else if (activeTab === "geo") setGeoData(null);
     else if (activeTab === "customers") setCustomersData(null);
     else if (activeTab === "sources") setSourcesData(null);
+    else if (activeTab === "devices") setDevicesData(null);
   }
 
   function handleTabChange(tab: string) {
@@ -1349,7 +1759,7 @@ export default function AnalyticsPage() {
         <div>
           <h2 className="text-lg font-semibold">Analytics</h2>
           <p className="text-sm text-muted-foreground">
-            Traffic, conversion, geographic, customer &amp; source insights
+            Traffic, conversion, geographic, customer, source &amp; device insights
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1384,12 +1794,13 @@ export default function AnalyticsPage() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="traffic">Traffic</TabsTrigger>
           <TabsTrigger value="funnel">Funnel</TabsTrigger>
           <TabsTrigger value="geo">Geographic</TabsTrigger>
           <TabsTrigger value="customers">Customers</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>
+          <TabsTrigger value="devices">Devices</TabsTrigger>
         </TabsList>
         <TabsContent value="traffic" className="mt-6">
           {loading && !trafficData ? (
@@ -1424,6 +1835,13 @@ export default function AnalyticsPage() {
             <AnalyticsLoading />
           ) : (
             <SourcesTab data={sourcesData} range={range} />
+          )}
+        </TabsContent>
+        <TabsContent value="devices" className="mt-6">
+          {loading && !devicesData ? (
+            <AnalyticsLoading />
+          ) : (
+            <DevicesTab data={devicesData} range={range} />
           )}
         </TabsContent>
       </Tabs>

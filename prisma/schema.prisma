@@ -477,11 +477,29 @@ model AnalyticsEvent {
   userAgent   String?
   referrer    String?
   metadata    String?  @db.Text
+  // Analytics v2 — IP dedup, UTM, device, source
+  ipHash      String?     // SHA-256 of IP+salt (privacy-safe dedup)
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+  utmContent  String?
+  utmTerm     String?
+  deviceType  String?     // "mobile" | "tablet" | "desktop"
+  browserName String?     // "Chrome" | "Safari" | etc.
+  osName      String?     // "Windows" | "iOS" | etc.
+  viewport    String?     // "1920x1080"
+  language    String?     // "en-US"
+  timezone    String?     // "America/New_York"
+  source      String?     // Pre-computed: UTM > referrer > "Direct"
   createdAt   DateTime @default(now())
 
   @@index([event, createdAt])
   @@index([sessionId])
   @@index([createdAt])
+  @@index([ipHash])
+  @@index([utmSource])
+  @@index([source])
+  @@index([deviceType])
 }
 
 // -- Email Log --

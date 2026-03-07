@@ -60,7 +60,8 @@ export async function GET(req: NextRequest) {
     else if (type === "geo") result = await handleGeo(startDate);
     else if (type === "customers") result = await handleCustomers(startDate);
     else if (type === "sources") result = await handleSources(days, startDate);
-    else return badRequest("Invalid type. Use: traffic, funnel, geo, customers, sources");
+    else if (type === "devices") result = await handleDevices(startDate);
+    else return badRequest("Invalid type. Use: traffic, funnel, geo, customers, sources, devices");
 
     setCache(cacheKey, result);
     return success(result);
@@ -72,22 +73,29 @@ export async function GET(req: NextRequest) {
 
 /* ══════════════════════════════════════════════════════════════════════
    Traffic — uses GROUP BY instead of loading every row into memory
+   Now includes IP-based unique visitor count alongside session-based.
    ══════════════════════════════════════════════════════════════════════ */
 async function handleTraffic(days: number, startDate: Date) {
-  // 3 efficient queries instead of loading all rows
-  const [totalPageViews, uniqueVisitorRows, viewsByDayRaw, topPagesRaw] =
+  const [totalPageViews, uniqueVisitorRows, uniqueIpRows, viewsByDayRaw, topPagesRaw] =
     await Promise.all([
       // Simple count
       prisma.analyticsEvent.count({
         where: { event: "page_view", createdAt: { gte: startDate } },
       }),
-      // COUNT DISTINCT via raw SQL — avoids loading millions of sessionIds
+      // COUNT DISTINCT sessions
       prisma.$queryRaw<[{ count: bigint }]>`
         SELECT COUNT(DISTINCT "sessionId") as count
         FROM "AnalyticsEvent"
         WHERE event = 'page_view' AND "createdAt" >= ${startDate}
       `,
-      // GROUP BY date — returns ~30 rows instead of ~150K rows
+      // COUNT DISTINCT IP hashes (real unique visitors)
+      prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(DISTINCT "ipHash") as count
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+          AND "ipHash" IS NOT NULL
+      `,
+      // GROUP BY date
       prisma.$queryRaw<Array<{ day: string; views: bigint }>>`
         SELECT TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
                COUNT(*) as views
@@ -96,7 +104,7 @@ async function handleTraffic(days: number, startDate: Date) {
         GROUP BY day
         ORDER BY day
       `,
-      // Top pages — already efficient with groupBy
+      // Top pages
       prisma.analyticsEvent.groupBy({
         by: ["url"],
         where: { event: "page_view", createdAt: { gte: startDate } },
@@ -107,6 +115,7 @@ async function handleTraffic(days: number, startDate: Date) {
     ]);
 
   const uniqueVisitors = Number(uniqueVisitorRows[0]?.count ?? 0);
+  const uniqueIpVisitors = Number(uniqueIpRows[0]?.count ?? 0);
 
   // Fill in zero-days for the chart
   const viewsByDayMap = new Map<string, number>();
@@ -128,12 +137,16 @@ async function handleTraffic(days: number, startDate: Date) {
     views: p._count,
   }));
 
+  // Use IP visitors for avg if available, fallback to session-based
+  const visitorCount = uniqueIpVisitors > 0 ? uniqueIpVisitors : uniqueVisitors;
+
   return {
     totalPageViews,
     uniqueVisitors,
+    uniqueIpVisitors,
     avgViewsPerVisitor:
-      uniqueVisitors > 0
-        ? Math.round((totalPageViews / uniqueVisitors) * 10) / 10
+      visitorCount > 0
+        ? Math.round((totalPageViews / visitorCount) * 10) / 10
         : 0,
     pageViewsByDay,
     topPages,
@@ -141,7 +154,7 @@ async function handleTraffic(days: number, startDate: Date) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Funnel — replaces 270 individual queries with 2 batch queries
+   Funnel — with IP-based visitor counts per stage
    ══════════════════════════════════════════════════════════════════════ */
 async function handleFunnel(days: number, startDate: Date) {
   const stages = [
@@ -152,23 +165,36 @@ async function handleFunnel(days: number, startDate: Date) {
     "purchase",
   ];
 
-  // 1 query: distinct sessions per event type (instead of 5 separate findMany)
-  const stageRows = await prisma.$queryRaw<
-    Array<{ event: string; sessions: bigint }>
-  >`
-    SELECT event, COUNT(DISTINCT "sessionId") as sessions
-    FROM "AnalyticsEvent"
-    WHERE event IN ('page_view','view_item','add_to_cart','begin_checkout','purchase')
-      AND "createdAt" >= ${startDate}
-    GROUP BY event
-  `;
+  // Session-based + IP-based counts per event
+  const [stageRows, ipStageRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ event: string; sessions: bigint }>>`
+      SELECT event, COUNT(DISTINCT "sessionId") as sessions
+      FROM "AnalyticsEvent"
+      WHERE event IN ('page_view','view_item','add_to_cart','begin_checkout','purchase')
+        AND "createdAt" >= ${startDate}
+      GROUP BY event
+    `,
+    prisma.$queryRaw<Array<{ event: string; visitors: bigint }>>`
+      SELECT event, COUNT(DISTINCT "ipHash") as visitors
+      FROM "AnalyticsEvent"
+      WHERE event IN ('page_view','view_item','add_to_cart','begin_checkout','purchase')
+        AND "createdAt" >= ${startDate}
+        AND "ipHash" IS NOT NULL
+      GROUP BY event
+    `,
+  ]);
 
   const stageMap = new Map(
     stageRows.map((r) => [r.event, Number(r.sessions)])
   );
+  const ipStageMap = new Map(
+    ipStageRows.map((r) => [r.event, Number(r.visitors)])
+  );
+
   const stageCounts = stages.map((event) => ({
     event,
     sessions: stageMap.get(event) || 0,
+    visitors: ipStageMap.get(event) || 0,
   }));
 
   // Calculate drop-off rates
@@ -182,16 +208,31 @@ async function handleFunnel(days: number, startDate: Date) {
       stageCounts[0].sessions > 0
         ? Math.round((stage.sessions / stageCounts[0].sessions) * 1000) / 10
         : 0;
+
+    // IP-based rates
+    const prevVisitors = i > 0 ? stageCounts[i - 1].visitors : stage.visitors;
+    const visitorRate =
+      prevVisitors > 0
+        ? Math.round((stage.visitors / prevVisitors) * 1000) / 10
+        : 0;
+    const overallVisitorRate =
+      stageCounts[0].visitors > 0
+        ? Math.round((stage.visitors / stageCounts[0].visitors) * 1000) / 10
+        : 0;
+
     return {
       stage: stage.event,
       label: formatStageName(stage.event),
       sessions: stage.sessions,
+      visitors: stage.visitors,
       rate,
       overallRate,
+      visitorRate,
+      overallVisitorRate,
     };
   });
 
-  // 1 query: daily counts for 3 key stages (instead of days×3 queries)
+  // Daily trend
   const dailyRows = await prisma.$queryRaw<
     Array<{ day: string; event: string; cnt: bigint }>
   >`
@@ -205,7 +246,6 @@ async function handleFunnel(days: number, startDate: Date) {
     ORDER BY day
   `;
 
-  // Build daily map
   const dailyMap = new Map<string, Record<string, number>>();
   const now = new Date();
   for (let i = days - 1; i >= 0; i--) {
@@ -245,6 +285,13 @@ async function handleFunnel(days: number, startDate: Date) {
       stageCounts[0].sessions > 0
         ? Math.round(
             ((stageMap.get("purchase") || 0) / stageCounts[0].sessions) * 1000
+          ) / 10
+        : 0,
+    // IP-based conversion rate
+    visitorPurchaseRate:
+      stageCounts[0].visitors > 0
+        ? Math.round(
+            ((ipStageMap.get("purchase") || 0) / stageCounts[0].visitors) * 1000
           ) / 10
         : 0,
   };
@@ -533,42 +580,27 @@ async function handleCustomers(startDate: Date) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Traffic Sources — parses referrer URLs into friendly source names
+   Traffic Sources — uses pre-computed source column for new data,
+   falls back to referrer parsing for old rows.
+   Includes UTM campaign breakdown.
    ══════════════════════════════════════════════════════════════════════ */
 const SOURCE_MAP: Record<string, string> = {
-  "google.com": "Google",
-  "www.google.com": "Google",
-  "google.ca": "Google",
-  "www.google.ca": "Google",
-  "bing.com": "Bing",
-  "www.bing.com": "Bing",
-  "facebook.com": "Facebook",
-  "www.facebook.com": "Facebook",
-  "m.facebook.com": "Facebook",
-  "l.facebook.com": "Facebook",
+  "google.com": "Google", "www.google.com": "Google",
+  "google.ca": "Google", "www.google.ca": "Google",
+  "bing.com": "Bing", "www.bing.com": "Bing",
+  "facebook.com": "Facebook", "www.facebook.com": "Facebook",
+  "m.facebook.com": "Facebook", "l.facebook.com": "Facebook",
   "lm.facebook.com": "Facebook",
-  "instagram.com": "Instagram",
-  "www.instagram.com": "Instagram",
+  "instagram.com": "Instagram", "www.instagram.com": "Instagram",
   "l.instagram.com": "Instagram",
-  "twitter.com": "X (Twitter)",
-  "www.twitter.com": "X (Twitter)",
-  "t.co": "X (Twitter)",
-  "x.com": "X (Twitter)",
-  "www.x.com": "X (Twitter)",
-  "tiktok.com": "TikTok",
-  "www.tiktok.com": "TikTok",
-  "youtube.com": "YouTube",
-  "www.youtube.com": "YouTube",
-  "m.youtube.com": "YouTube",
-  "reddit.com": "Reddit",
-  "www.reddit.com": "Reddit",
-  "old.reddit.com": "Reddit",
-  "duckduckgo.com": "DuckDuckGo",
-  "www.duckduckgo.com": "DuckDuckGo",
-  "pinterest.com": "Pinterest",
-  "www.pinterest.com": "Pinterest",
-  "linkedin.com": "LinkedIn",
-  "www.linkedin.com": "LinkedIn",
+  "twitter.com": "X (Twitter)", "www.twitter.com": "X (Twitter)",
+  "t.co": "X (Twitter)", "x.com": "X (Twitter)", "www.x.com": "X (Twitter)",
+  "tiktok.com": "TikTok", "www.tiktok.com": "TikTok",
+  "youtube.com": "YouTube", "www.youtube.com": "YouTube", "m.youtube.com": "YouTube",
+  "reddit.com": "Reddit", "www.reddit.com": "Reddit", "old.reddit.com": "Reddit",
+  "duckduckgo.com": "DuckDuckGo", "www.duckduckgo.com": "DuckDuckGo",
+  "pinterest.com": "Pinterest", "www.pinterest.com": "Pinterest",
+  "linkedin.com": "LinkedIn", "www.linkedin.com": "LinkedIn",
 };
 
 const INTERNAL_DOMAINS = ["localhost", "127.0.0.1", "resinplug"];
@@ -582,83 +614,142 @@ function mapSourceName(domain: string): string {
 }
 
 async function handleSources(days: number, startDate: Date) {
-  // Query 1: Group page_view referrers by extracted domain
-  const referrerRows = await prisma.$queryRaw<
-    Array<{ domain: string | null; sessions: bigint; page_views: bigint }>
-  >`
-    SELECT
-      CASE
-        WHEN referrer IS NULL OR referrer = '' THEN NULL
-        ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
-      END as domain,
-      COUNT(DISTINCT "sessionId") as sessions,
-      COUNT(*) as page_views
-    FROM "AnalyticsEvent"
-    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
-    GROUP BY domain
-    ORDER BY sessions DESC
-  `;
+  // Use pre-computed source column for new rows, referrer parsing for old rows
+  const [sourceRows, referrerRows, totalSessionsRow, purchaseSessionsRaw, dailyRows, campaignRows] =
+    await Promise.all([
+      // New rows with pre-computed source column
+      prisma.$queryRaw<
+        Array<{ source: string; sessions: bigint; page_views: bigint }>
+      >`
+        SELECT COALESCE(source, 'Direct') as source,
+               COUNT(DISTINCT "sessionId") as sessions,
+               COUNT(*) as page_views
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+          AND source IS NOT NULL
+        GROUP BY source
+        ORDER BY sessions DESC
+      `,
+      // Old rows (source IS NULL) — fall back to referrer parsing
+      prisma.$queryRaw<
+        Array<{ domain: string | null; sessions: bigint; page_views: bigint }>
+      >`
+        SELECT
+          CASE
+            WHEN referrer IS NULL OR referrer = '' THEN NULL
+            ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
+          END as domain,
+          COUNT(DISTINCT "sessionId") as sessions,
+          COUNT(*) as page_views
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+          AND source IS NULL
+        GROUP BY domain
+        ORDER BY sessions DESC
+      `,
+      // Total unique sessions
+      prisma.$queryRaw<[{ count: bigint }]>`
+        SELECT COUNT(DISTINCT "sessionId") as count
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+      `,
+      // Purchase sessions with source attribution
+      prisma.$queryRaw<
+        Array<{ source: string; purchase_sessions: bigint }>
+      >`
+        SELECT
+          sub.source,
+          COUNT(*) as purchase_sessions
+        FROM (
+          SELECT DISTINCT ON (p."sessionId")
+            p."sessionId",
+            COALESCE(
+              pv.source,
+              CASE
+                WHEN pv.referrer IS NULL OR pv.referrer = '' THEN 'Direct'
+                ELSE LOWER(SUBSTRING(pv.referrer FROM '://([^/]+)'))
+              END
+            ) as source
+          FROM "AnalyticsEvent" p
+          INNER JOIN "AnalyticsEvent" pv
+            ON p."sessionId" = pv."sessionId"
+            AND pv.event = 'page_view'
+            AND pv."createdAt" >= ${startDate}
+          WHERE p.event = 'purchase' AND p."createdAt" >= ${startDate}
+          ORDER BY p."sessionId", pv."createdAt" ASC
+        ) sub
+        GROUP BY sub.source
+      `,
+      // Daily breakdown
+      prisma.$queryRaw<
+        Array<{ day: string; source: string; sessions: bigint }>
+      >`
+        SELECT
+          TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
+          COALESCE(
+            source,
+            CASE
+              WHEN referrer IS NULL OR referrer = '' THEN 'Direct'
+              ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
+            END
+          ) as source,
+          COUNT(DISTINCT "sessionId") as sessions
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        GROUP BY day, source
+        ORDER BY day
+      `,
+      // UTM campaign breakdown (top 20)
+      prisma.$queryRaw<
+        Array<{ campaign: string; source: string; medium: string; sessions: bigint; page_views: bigint }>
+      >`
+        SELECT
+          COALESCE("utmCampaign", '(none)') as campaign,
+          COALESCE("utmSource", '(none)') as source,
+          COALESCE("utmMedium", '(none)') as medium,
+          COUNT(DISTINCT "sessionId") as sessions,
+          COUNT(*) as page_views
+        FROM "AnalyticsEvent"
+        WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+          AND "utmCampaign" IS NOT NULL
+        GROUP BY "utmCampaign", "utmSource", "utmMedium"
+        ORDER BY sessions DESC
+        LIMIT 20
+      `,
+    ]);
 
-  // Query 2: Total unique sessions
-  const totalSessionsRow = await prisma.$queryRaw<[{ count: bigint }]>`
-    SELECT COUNT(DISTINCT "sessionId") as count
-    FROM "AnalyticsEvent"
-    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
-  `;
   const totalSessions = Number(totalSessionsRow[0]?.count ?? 0);
 
-  // Query 3: Sessions that led to a purchase — get each session's earliest referrer
-  const purchaseSessionsRaw = await prisma.$queryRaw<
-    Array<{ domain: string | null; purchase_sessions: bigint }>
-  >`
-    SELECT
-      sub.domain,
-      COUNT(*) as purchase_sessions
-    FROM (
-      SELECT DISTINCT ON (p."sessionId")
-        p."sessionId",
-        CASE
-          WHEN pv.referrer IS NULL OR pv.referrer = '' THEN NULL
-          ELSE LOWER(SUBSTRING(pv.referrer FROM '://([^/]+)'))
-        END as domain
-      FROM "AnalyticsEvent" p
-      INNER JOIN "AnalyticsEvent" pv
-        ON p."sessionId" = pv."sessionId"
-        AND pv.event = 'page_view'
-        AND pv."createdAt" >= ${startDate}
-      WHERE p.event = 'purchase' AND p."createdAt" >= ${startDate}
-      ORDER BY p."sessionId", pv."createdAt" ASC
-    ) sub
-    GROUP BY sub.domain
-  `;
+  // Build purchase map
   const purchaseMap = new Map(
-    purchaseSessionsRaw.map((r) => [r.domain, Number(r.purchase_sessions)])
+    purchaseSessionsRaw.map((r) => [r.source, Number(r.purchase_sessions)])
   );
 
-  // Query 4: Daily breakdown by domain (for trend chart)
-  const dailyRows = await prisma.$queryRaw<
-    Array<{ day: string; domain: string | null; sessions: bigint }>
-  >`
-    SELECT
-      TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') as day,
-      CASE
-        WHEN referrer IS NULL OR referrer = '' THEN NULL
-        ELSE LOWER(SUBSTRING(referrer FROM '://([^/]+)'))
-      END as domain,
-      COUNT(DISTINCT "sessionId") as sessions
-    FROM "AnalyticsEvent"
-    WHERE event = 'page_view' AND "createdAt" >= ${startDate}
-    GROUP BY day, domain
-    ORDER BY day
-  `;
-
-  // Merge raw domains into friendly source names
+  // Merge sources: pre-computed + legacy referrer-parsed
   const sourceAgg = new Map<
     string,
     { sessions: number; pageViews: number; purchaseSessions: number }
   >();
   let directSessions = 0;
 
+  // Add pre-computed source rows
+  for (const row of sourceRows) {
+    const sourceName = row.source;
+    const sessions = Number(row.sessions);
+    const pageViews = Number(row.page_views);
+    if (sourceName === "Direct") directSessions += sessions;
+    const existing = sourceAgg.get(sourceName);
+    const ps = purchaseMap.get(sourceName) || 0;
+    if (existing) {
+      existing.sessions += sessions;
+      existing.pageViews += pageViews;
+      existing.purchaseSessions += ps;
+    } else {
+      sourceAgg.set(sourceName, { sessions, pageViews, purchaseSessions: ps });
+    }
+  }
+
+  // Add legacy referrer rows
   for (const row of referrerRows) {
     const sessions = Number(row.sessions);
     const pageViews = Number(row.page_views);
@@ -673,7 +764,7 @@ async function handleSources(days: number, startDate: Date) {
         sourceAgg.set("Direct", {
           sessions,
           pageViews,
-          purchaseSessions: purchaseMap.get(null) || 0,
+          purchaseSessions: purchaseMap.get("Direct") || purchaseMap.get(null as unknown as string) || 0,
         });
       }
       continue;
@@ -736,13 +827,11 @@ async function handleSources(days: number, startDate: Date) {
     const dayData = dailyMap.get(row.day);
     if (!dayData) continue;
 
-    let sourceName: string;
-    if (!row.domain) {
-      sourceName = "Direct";
-    } else if (isInternalReferrer(row.domain)) {
-      continue;
-    } else {
-      sourceName = mapSourceName(row.domain);
+    let sourceName = row.source || "Direct";
+    if (sourceName !== "Direct" && !SOURCE_MAP[sourceName]) {
+      // It might be a raw domain from the COALESCE fallback
+      if (isInternalReferrer(sourceName)) continue;
+      sourceName = mapSourceName(sourceName);
     }
 
     if (top5Sources.includes(sourceName)) {
@@ -761,6 +850,15 @@ async function handleSources(days: number, startDate: Date) {
       ? Math.round((directSessions / totalSessions) * 1000) / 10
       : 0;
 
+  // UTM campaigns
+  const campaigns = campaignRows.map((r) => ({
+    campaign: r.campaign,
+    source: r.source,
+    medium: r.medium,
+    sessions: Number(r.sessions),
+    pageViews: Number(r.page_views),
+  }));
+
   return {
     totalSessions,
     topSource,
@@ -769,5 +867,93 @@ async function handleSources(days: number, startDate: Date) {
     pieData,
     sourcesByDay,
     top5Sources,
+    campaigns,
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   Devices — device type, browser, OS distributions
+   ══════════════════════════════════════════════════════════════════════ */
+async function handleDevices(startDate: Date) {
+  const [deviceRows, browserRows, osRows, totalRow] = await Promise.all([
+    // Device type distribution
+    prisma.$queryRaw<Array<{ device_type: string; sessions: bigint }>>`
+      SELECT COALESCE("deviceType", 'unknown') as device_type,
+             COUNT(DISTINCT "sessionId") as sessions
+      FROM "AnalyticsEvent"
+      WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        AND "deviceType" IS NOT NULL
+      GROUP BY "deviceType"
+      ORDER BY sessions DESC
+    `,
+    // Browser breakdown (top 10)
+    prisma.$queryRaw<Array<{ browser: string; sessions: bigint }>>`
+      SELECT COALESCE("browserName", 'Unknown') as browser,
+             COUNT(DISTINCT "sessionId") as sessions
+      FROM "AnalyticsEvent"
+      WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        AND "browserName" IS NOT NULL
+      GROUP BY "browserName"
+      ORDER BY sessions DESC
+      LIMIT 10
+    `,
+    // OS breakdown (top 10)
+    prisma.$queryRaw<Array<{ os: string; sessions: bigint }>>`
+      SELECT COALESCE("osName", 'Unknown') as os,
+             COUNT(DISTINCT "sessionId") as sessions
+      FROM "AnalyticsEvent"
+      WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        AND "osName" IS NOT NULL
+      GROUP BY "osName"
+      ORDER BY sessions DESC
+      LIMIT 10
+    `,
+    // Total sessions with device data
+    prisma.$queryRaw<[{ count: bigint }]>`
+      SELECT COUNT(DISTINCT "sessionId") as count
+      FROM "AnalyticsEvent"
+      WHERE event = 'page_view' AND "createdAt" >= ${startDate}
+        AND "deviceType" IS NOT NULL
+    `,
+  ]);
+
+  const totalSessions = Number(totalRow[0]?.count ?? 0);
+
+  const devices = deviceRows.map((r) => ({
+    type: r.device_type,
+    sessions: Number(r.sessions),
+    percentage: totalSessions > 0
+      ? Math.round((Number(r.sessions) / totalSessions) * 1000) / 10
+      : 0,
+  }));
+
+  const browsers = browserRows.map((r) => ({
+    name: r.browser,
+    sessions: Number(r.sessions),
+    percentage: totalSessions > 0
+      ? Math.round((Number(r.sessions) / totalSessions) * 1000) / 10
+      : 0,
+  }));
+
+  const operatingSystems = osRows.map((r) => ({
+    name: r.os,
+    sessions: Number(r.sessions),
+    percentage: totalSessions > 0
+      ? Math.round((Number(r.sessions) / totalSessions) * 1000) / 10
+      : 0,
+  }));
+
+  const mobileShare = devices.find((d) => d.type === "mobile")?.percentage || 0;
+  const tabletShare = devices.find((d) => d.type === "tablet")?.percentage || 0;
+
+  return {
+    devices,
+    browsers,
+    operatingSystems,
+    totalSessions,
+    mobileShare,
+    mobileAndTabletShare: Math.round((mobileShare + tabletShare) * 10) / 10,
+    topBrowser: browsers[0]?.name || "N/A",
+    topOS: operatingSystems[0]?.name || "N/A",
   };
 }
