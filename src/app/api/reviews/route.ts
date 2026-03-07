@@ -46,14 +46,17 @@ export async function GET(request: NextRequest) {
       case "rating":
         orderBy = { rating: "desc" };
         break;
+      case "rating_asc":
+        orderBy = { rating: "asc" };
+        break;
       case "recent":
       default:
         orderBy = { createdAt: "desc" };
         break;
     }
 
-    // Execute query with count
-    const [reviews, total] = await Promise.all([
+    // Execute query with count + distribution
+    const [reviews, total, dist] = await Promise.all([
       prisma.review.findMany({
         where,
         include: {
@@ -71,7 +74,17 @@ export async function GET(request: NextRequest) {
         take: limit,
       }),
       prisma.review.count({ where }),
+      prisma.review.groupBy({
+        by: ["rating"],
+        _count: { rating: true },
+      }),
     ]);
+
+    // Build distribution map { 5: count, 4: count, ... }
+    const distribution: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    for (const d of dist) {
+      distribution[d.rating] = d._count.rating;
+    }
 
     const formatted = reviews.map((r) => formatReview(serializeDecimals(r) as Record<string, unknown>));
 
@@ -81,6 +94,7 @@ export async function GET(request: NextRequest) {
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        distribution,
       },
     });
   } catch (err) {

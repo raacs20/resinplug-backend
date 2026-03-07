@@ -872,6 +872,28 @@ function addCasualSpeech(text: string): string {
    REVIEW GENERATOR
    ================================================================ */
 
+// Plain nouns (no determiner) — used when template already has "the/this/my" before {NAME}
+const GENERIC_NOUNS = ["resin", "stuff", "product", "strain", "live resin", "order"];
+// Full phrases — used when {NAME} appears standalone or at start of sentence
+const GENERIC_PHRASES = ["this resin", "this stuff", "this one", "this strain", "the resin", "this product"];
+
+function replaceNameSmart(template: string, product: ProductConfig): string {
+  const useName = rand() < 0.20;
+  if (useName) {
+    return template.replace(/\{NAME\}/g, product.name);
+  }
+
+  // Replace each {NAME} occurrence context-sensitively
+  return template.replace(/(the |this |my |our |your )?\{NAME\}/gi, (match, prefix) => {
+    if (prefix) {
+      // Already has a determiner — just use a plain noun
+      return prefix + pick(GENERIC_NOUNS);
+    }
+    // No determiner — use a full phrase
+    return pick(GENERIC_PHRASES);
+  });
+}
+
 function fillTemplate(template: string, product: ProductConfig): string {
   const f1 = pick(product.flavors);
   let f2 = pick(product.flavors);
@@ -885,13 +907,17 @@ function fillTemplate(template: string, product: ProductConfig): string {
     e2 = pick(effects);
   }
 
-  return template
-    .replace(/\{NAME\}/g, product.name)
+  // Smart name replacement: ~20% use actual strain name, rest use generic terms
+  let result = replaceNameSmart(template, product);
+
+  result = result
     .replace(/\{FLAVOR1\}/g, f1)
     .replace(/\{FLAVOR2\}/g, f2)
     .replace(/\{EFFECT1\}/g, e1.toLowerCase())
     .replace(/\{EFFECT2\}/g, e2.toLowerCase())
     .replace(/\{CATEGORY\}/g, product.category.toLowerCase());
+
+  return result;
 }
 
 type ContentCategory =
@@ -937,13 +963,13 @@ function generate5StarReview(product: ProductConfig): string {
 
   if (length === "mega_short") {
     const base = pick(MEGA_SHORT_5STAR);
-    // Vary mega shorts more by sometimes appending product name or a connector
+    // Vary mega shorts — only ~20% mention the actual strain name
     const variant = rand();
-    if (variant < 0.25) {
+    if (variant < 0.05) {
       return `${base}. ${product.name} is incredible.`;
-    } else if (variant < 0.45) {
+    } else if (variant < 0.10) {
       return `${product.name} — ${base.toLowerCase().replace(/[.!]+$/, "")}!`;
-    } else if (variant < 0.60) {
+    } else if (variant < 0.40) {
       return `${base} ${pick(SHORT_CONNECTORS)}`;
     }
     return base;
